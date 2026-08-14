@@ -7,9 +7,10 @@ import { LevelBuilder } from './level/LevelBuilder.js';
 import { PlayerController } from './engine/PlayerController.js';
 import { MonsterEntity } from './entities/MonsterEntity.js';
 import { Viewmodel } from './entities/Viewmodel.js';
-import { QuestManager } from './level/QuestManager.js';
+import { QuestManager, STEP } from './level/QuestManager.js';
 import { StoryManager } from './engine/StoryManager.js';
 import { EventManager } from './engine/EventManager.js';
+import { TimerRegistry } from './engine/Timers.js';
 
 class Game {
   constructor() {
@@ -18,6 +19,8 @@ class Game {
     this.gameTime = 0;
     this.introActive = true;
     this.carExited = false;
+    /** Every intro/scripted timer lives here so a restart can wipe them all. */
+    this.timers = new TimerRegistry();
 
     this.initScene();
     this.initAudio();
@@ -77,9 +80,13 @@ class Game {
     this.propsTexture = ChromaKeyer.createKeyedTexture(keyedProps, 4, 2);
     this.viewmodelFrames = ChromaKeyer.sliceFrames(keyedHands, 4, 2);
 
-    const rawHatchling = ProceduralTextureGen.generateChickenMonsterSheet();
-    const keyedHatchling = ChromaKeyer.processChromaKey(rawHatchling);
-    this.hatchlingTexture = ChromaKeyer.createKeyedTexture(keyedHatchling, 4, 4);
+    // Hatchlings use the same procedural sheet as the adult until the real JPG
+    // arrives - reuse the already-keyed canvas instead of generating and
+    // chroma-keying a second 1024x512 buffer for identical pixels. The
+    // placeholder is 4x2, the real art is 4x4, so the sprite is told which
+    // layout it currently holds and re-lays-out when the JPG lands.
+    this.hatchlingTexture = ChromaKeyer.createKeyedTexture(keyedMonster, 4, 2);
+    this.hatchlingTexture.userData = { cols: 4, rows: 2 };
 
     // Async load real JPGs
     ChromaKeyer.loadAndKeyImage('/assets/chicken_monster.jpg').then(canvas => {
@@ -102,10 +109,28 @@ class Game {
     });
 
     ChromaKeyer.loadAndKeyImage('/assets/chicken_hatchling.jpg').then(canvas => {
-      if (canvas) {
-        const trimmed = ChromaKeyer.createTrimmedAtlas(canvas, 4, 4);
-        this.hatchlingTexture = ChromaKeyer.createKeyedTexture(trimmed, 4, 4);
-        if (this.questManager) this.questManager.hatchlingTexture = this.hatchlingTexture;
+      if (!canvas) return;
+      // The hatchling sheet is a 4x4 grid (walk / attack / lunge / death) but
+      // it carries a caption gutter down the left edge and a margin on the
+      // right. Measured grid: x 151..1261 of 1376. Slicing the full canvas
+      // would shear every frame sideways.
+      const grid = { x: 151, y: 0, width: 1110, height: canvas.height };
+      // Swap the image in place so live hatchlings pick up the real art, and
+      // never leave the placeholder texture on the GPU.
+      this.hatchlingTexture.image = ChromaKeyer.createTrimmedAtlas(canvas, 4, 4, 0.035, grid);
+      this.hatchlingTexture.needsUpdate = true;
+      this.hatchlingTexture.userData = { cols: 4, rows: 4 };
+      if (this.questManager) {
+        this.questManager.hatchlingTexture = this.hatchlingTexture;
+        // AnimatedSprite clones its texture, so live hatchlings need the new
+        // image pushed onto their own clone - and the grid changes from 4x2
+        // to 4x4, so the UV layout has to be rebuilt too.
+        for (const h of this.questManager.hatchlings) {
+          if (!h.sprite?.texture) continue;
+          h.sprite.texture.image = this.hatchlingTexture.image;
+          h.sprite.texture.needsUpdate = true;
+          h.sprite.setGrid(4, 4);
+        }
       }
     });
 
@@ -121,14 +146,6 @@ class Game {
       if (canvas) {
         this.propsTexture.image = ChromaKeyer.createTrimmedAtlas(canvas, 4, 2);
         this.propsTexture.needsUpdate = true;
-      }
-    });
-
-    ChromaKeyer.loadAndKeyImage('/assets/kfc_items2.jpg').then(canvas => {
-      if (canvas) {
-        const trimmedItems = ChromaKeyer.createTrimmedAtlas(canvas, 4, 2);
-        this.items2Texture = ChromaKeyer.createKeyedTexture(trimmedItems, 4, 2);
-        if (this.questManager) this.questManager.itemsTexture = this.items2Texture;
       }
     });
 
@@ -207,21 +224,19 @@ class Game {
       hatchlingTexture: this.hatchlingTexture,
       storyManager: this.storyManager,
       eventManager: this.eventManager,
-      colliders: this.colliders
+      colliders: this.colliders,
+      game: this
     });
     this.player.questManager = this.questManager;
 
-    // Merge door colliders into player's list for collision
-    if (this.questManager.doorSystem) {
-      // Add doors to colliders array (reference already, but ensure)
-      // We'll manage dynamic via PlayerController's check.
-      this.colliders.push(...this.questManager.doorSystem.getColliders().filter(c => !this.colliders.includes(c)));
-      // Also add freezer door if still there
-      const freezerDoor = this.scene.children.find(o => o.userData?.type === 'freezer_door');
-      if (freezerDoor && !this.colliders.includes(freezerDoor)) this.colliders.push(freezerDoor);
-      // Refresh bounds
-      this.player.colliderBounds = this.colliders.map(o => ({ object: o, box: new THREE.Box3().setFromObject(o) }));
+    // Door leaves join the shared collider array. Everything that collides
+    // (player, monster, hatchlings) reads this same array, so there is exactly
+    // one collision world.
+    for (const leaf of this.questManager.doorSystem.getColliders()) {
+      if (!this.colliders.includes(leaf)) this.colliders.push(leaf);
     }
+    this.player.syncColliders();
+    this.monster.doorSystem = this.questManager.doorSystem;
 
     // Player start callback for intro
     this.player.onStart = () => this.beginCarSequence();
@@ -268,138 +283,185 @@ class Game {
     console.log('[Game] Begin car sequence - stranded on Route 17');
     this.introActive = true;
     this.carExited = false;
+    this.timers.clearAll();
 
     if (this.carIntro) this.carIntro.classList.add('active');
     if (this.carRain) this.carRain.classList.add('active');
 
-    // Player in car seat
-    this.player.position.set(2.2, 1.35, -42.5);
+    // Player in the driver's seat: they can look around and press E, but the
+    // movement lock means they cannot walk out of the cinematic.
+    this.player.position.set(2.2, 0.95, -42.5);
     this.player.yaw = -0.15;
     this.player.pitch = 0.06;
-    this.player.targetHeight = 0.95; // seated
-    this.questManager.currentStep = 0;
-    this.questManager.updateHUD();
+    this.player.targetHeight = 0.95;
+    this.player.movementLocked = true;
+    this.player.interactOverride = null;   // E does nothing until the radio finishes
+    this.questManager.setStep(STEP.INTRO, true);
 
-    // Radio static text sequence
+    // Radio: one timer chain, one message at a time. Driven off the registry
+    // so skipping or restarting cannot leave an orphaned interval running.
     const messages = [
       '-- kzzzh -- scanning 88.1 ...',
       '-- kzzzh -- ... ROAD CLOSED -- ...',
       '... Route 17, avoid ... restaurant ... lights on ...',
-      '-- kzzz -- DON\'T GO IN THE VAULT --',
-      '-- ... IT\'S NOT CHICKEN ... IT KNOWS ...',
+      "-- kzzz -- DON'T GO IN THE VAULT --",
+      "-- ... IT'S NOT CHICKEN ... IT KNOWS ...",
       '-- kzzzh -- ENGINE OVERHEAT -- FUEL LEAK --',
       'FUEL: EMPTY - FIND SHELTER',
       '[E] EXIT CAR'
     ];
     let msgIdx = 0;
-    this.radioInterval = setInterval(() => {
+    this.radioTimer = this.timers.setInterval(() => {
       if (this.radioText) this.radioText.textContent = messages[msgIdx];
-      if (msgIdx < messages.length - 1) msgIdx++;
-      // Play static
-      if (this.audio) this.audio.playRadioStatic(0.22);
-      if (msgIdx === 3 && this.audio) this.audio.playWhisper(0.2);
+      this.audio?.playRadioStatic(0.22);
+      if (msgIdx === 3) this.audio?.playWhisper(0.2);
+      msgIdx++;
+      if (msgIdx >= messages.length) {
+        this.timers.clearInterval(this.radioTimer);
+        this.radioTimer = null;
+        this.armCarExit();
+      }
     }, 1300);
 
-    // After some time, highlight interact prompt for car exit
-    setTimeout(() => {
-      if (this.player && !this.carExited) {
-        this.player.showNotification('[E] EXIT CAR - GO TO LIGHTS', 4200);
-      }
-    }, 4800);
+    // Safety net: if audio is blocked or the tab was backgrounded, the exit
+    // still arms on a wall clock.
+    this.timers.setTimeout(() => this.armCarExit(), messages.length * 1300 + 1500);
+  }
+
+  /**
+   * Hands control of E back to the player, once, at the end of the radio
+   * sequence. Before this point the intro plays out uninterrupted.
+   */
+  armCarExit() {
+    if (this.carExited || this.exitArmed) return;
+    this.exitArmed = true;
+    this.player.interactOverride = () => this.exitCar();
+    this.player.showNotification('[E] EXIT CAR - GO TO THE LIGHTS', 5000);
   }
 
   exitCar() {
     if (this.carExited) return;
     this.carExited = true;
+    this.introActive = false;
+    this.exitArmed = false;
     console.log('[Game] Exited car - entering exterior');
 
-    clearInterval(this.radioInterval);
+    // Everything the intro scheduled dies here, including the radio.
+    this.timers.clearAll();
+    this.radioTimer = null;
+
+    this.player.interactOverride = null;
+    this.player.movementLocked = false;
 
     if (this.carIntro) this.carIntro.classList.remove('active');
-    if (this.carRain) {
-      setTimeout(() => this.carRain.classList.remove('active'), 1200);
-    }
+    if (this.carRain) this.timers.setTimeout(() => this.carRain.classList.remove('active'), 1200);
 
-    // Teleport just outside car
+    // Step out beside the driver's door.
     this.player.position.set(3.4, this.player.playerHeight, -40.2);
     this.player.targetHeight = this.player.playerHeight;
     this.player.yaw = Math.PI * -0.15;
     this.player.addScreenShake(0.12, 0.4);
 
-    this.questManager.currentStep = 1;
-    this.storyManager.progressBeat('ARRIVAL');
-    this.questManager.updateHUD();
+    this.questManager.hasExitedCar = true;
+    this.questManager.completeObjective('exit_car');
 
-    // Outdoor ambience
     this.audio.setAmbienceZone('outdoor');
     this.lighting.setPower(true); // exterior still has power
 
-    // First clue notification
-    setTimeout(() => {
+    this.timers.setTimeout(() => {
       this.questManager.showBanner('ROUTE 17 - STORE #09 - LIGHTS ON', 2600);
     }, 800);
 
-    // Allow flashlight, give low battery start for tension
+    // Start on a worn battery: the flashlight is a resource from minute one.
     this.player.battery = 86;
     this.player.updateBatteryHUD();
     this.lighting.setBatteryLevel(this.player.battery);
-
-    // Footstep on gravel
     this.audio.footstepMaterial = 'concrete';
+  }
+
+  /**
+   * Full in-place restart. Every system is reset in dependency order rather
+   * than reloading the page, so the WebGL context, textures and listeners are
+   * reused and run 2 starts instantly.
+   */
+  restart() {
+    console.log('[Game] Restart');
+    this.timers.clearAll();
+
+    // Hide every terminal / modal overlay.
+    for (const id of ['jumpscare-overlay', 'win-screen', 'document-modal', 'cctv-modal', 'pause-menu']) {
+      const el = document.getElementById(id);
+      if (el) el.style.display = 'none';
+    }
+
+    this.questManager.reset();
+    this.player.reset();
+    this.storyManager.reset();
+    this.eventManager.reset();
+    this.lighting.reset();
+    this.audio.reset();
+
+    this.gameTime = 0;
+    this.clock.start();
+    // Every "only write the DOM when it changed" cache has to be invalidated
+    // too, or run 2 keeps showing run 1's last value until it happens to move.
+    this.lastStaminaPercent = -1;
+    this.lastClockSecond = -1;
+    this._lastClueCount = -1;
+    this._lastZone = null;
+    this._pendingGeneratorEvent = false;
+    this.gameStartTime = Date.now();
+    if (this.clueCounterEl && this.storyManager) {
+      this.clueCounterEl.textContent = `CLUES 0/${this.storyManager.getTotalClues()}`;
+    }
+
+    this.beginCarSequence();
+    this.player.requestLock?.();
   }
 
   animate() {
     requestAnimationFrame(this.animate);
 
     const delta = Math.min(this.clock.getDelta(), 0.1);
-    const elapsed = this.clock.getElapsedTime();
     this.gameTime += delta;
 
-    // Handle intro car exit logic via interaction / proximity
-    if (this.introActive && !this.carExited && this.player.isStarted) {
-      // If player tries to move while in car intro, count as exit attempt
-      if (this.player.isMoving || this.player.keys['KeyE'] || this.player.keys['KeyW'] || this.player.focusedObject?.userData?.type === 'car') {
-        // If pressing E near car or moving > threshold, exit
-        const distToOutside = this.player.position.distanceTo(new THREE.Vector3(3.4, 1.65, -40));
-        if (this.player.keys['KeyW'] || (this.player.focusedObject && this.player.focusedObject.userData.type === 'car') || distToOutside < 1.5 || this.gameTime > 8) {
-          // Check for E press
-          if (this.player.keys['KeyW'] || this.player._eDown) {
-            this.exitCar();
-          }
-        }
-      }
-      // Auto-exit after 16 sec if stuck
-      if (this.gameTime > 22 && !this.carExited) {
-        this.exitCar();
-      }
+    const ended = this.questManager?.gameOver || this.questManager?.gameWon;
+
+    if (this.lighting) this.lighting.update(delta, this.gameTime);
+
+    // Simulation halts on a terminal state; rendering does not, so the death
+    // and victory screens sit over a live (but frozen) world.
+    if (!ended) {
+      this.updateSimulation(delta);
     }
 
-    // Lighting & fog density based on zone/power
-    if (this.lighting) {
-      this.lighting.update(delta, elapsed);
+    this.updateClock();
+    this.renderer.render(this.scene, this.camera);
+  }
+
+  /** Everything that advances game state. Skipped once the run has ended. */
+  updateSimulation(delta) {
+    // Player + interaction targets. The list is rebuilt into a reused array
+    // rather than a fresh one each frame.
+    const list = this._interactList || (this._interactList = []);
+    list.length = 0;
+    const props = this.levelBuilder?.propFactory?.interactables;
+    if (props) for (const p of props) list.push(p);
+    if (this.questManager?.doorSystem) {
+      for (const door of this.questManager.doorSystem.doors.values()) list.push(door.hingeGroup);
     }
+    this.player.update(delta, list);
 
-    // Player
-    if (this.player) {
-      const interactList = [...(this.levelBuilder?.propFactory?.interactables || []), ...(this.questManager?.doorSystem ? Array.from(this.questManager.doorSystem.doors.values()).map(d => d.hingeGroup) : [])];
-      this.player.update(delta, interactList);
-
-      if (this.staminaBarEl) {
-        const pct = (this.player.stamina / this.player.maxStamina) * 100;
-        if (Math.abs(pct - this.lastStaminaPercent) >= 0.5) {
-          this.staminaBarEl.style.width = `${pct}%`;
-          this.lastStaminaPercent = pct;
-        }
-      }
-
-      // Also update interactables collision if doors moved
-      if (this.questManager?.doorSystem) {
-        // Already handled via move check
+    if (this.staminaBarEl) {
+      const pct = (this.player.stamina / this.player.maxStamina) * 100;
+      if (Math.abs(pct - this.lastStaminaPercent) >= 0.5) {
+        this.staminaBarEl.style.width = `${pct}%`;
+        this.lastStaminaPercent = pct;
       }
     }
 
     // Monster AI
-    if (this.monster && this.player) {
+    if (this.monster) {
       this.monster.update(
         delta,
         this.player.position,
@@ -410,52 +472,108 @@ class Game {
       );
     }
 
-    // Quest & Story
-    if (this.questManager && this.player) {
+    // Quest, story, hatchlings, doors
+    if (this.questManager) {
       this.questManager.update(delta, this.player.position);
-
-      // Update clue counter
       if (this.clueCounterEl && this.storyManager) {
-        this.clueCounterEl.textContent = `CLUES ${this.storyManager.getDiscoveredCount()}/${this.storyManager.getTotalClues()}`;
+        const found = this.storyManager.getDiscoveredCount();
+        if (found !== this._lastClueCount) {
+          this._lastClueCount = found;
+          this.clueCounterEl.textContent = `CLUES ${found}/${this.storyManager.getTotalClues()}`;
+        }
       }
     }
 
-    // Events
-    if (this.eventManager && this.player) {
-      const context = {
-        time: this.gameTime,
-        phase: this.questManager?.currentStep || 0,
-        zone: this.lighting?.getCurrentZone(this.player.position) || 'outdoor',
-        distToBallPit: this.player.position.distanceTo(new THREE.Vector3(22, 0, -18)),
-        justEnteredCorridor: false,
-        seenPortrait: this.gameTime > 40 ? 3 : 0,
-        watchCCTV: false,
-        justFueledGenerator: this.questManager?.generatorPowered && this.gameTime % 2 < 0.1,
-        isAlone: this.monster ? this.player.position.distanceTo(this.monster.mesh.position) > 14 : true,
-        nearCar: this.player.position.distanceTo(this.levelBuilder?.carGroup?.position || new THREE.Vector3(0,0,-42)) < 5,
-        enteredGeneratorRoom: (this.lighting?.getCurrentZone(this.player.position) === 'basement'),
-        enteredBallPit: this.player.position.distanceTo(new THREE.Vector3(22,0,-18)) < 3
-      };
-      this.eventManager.update(delta, context);
-    }
+    // Chase music follows the actual threat state rather than a guess.
+    this.updateTension();
 
-    // Clock VHS time - starts at 03:14
-    if (this.clockEl) {
-      const totalSec = Math.floor(elapsed);
-      if (totalSec !== this.lastClockSecond) {
-        const mins = Math.floor((14 * 60 + totalSec) / 60) % 60;
-        const secs = (14 * 60 + totalSec) % 60;
-        const m = mins < 10 ? `0${mins}` : `${mins}`;
-        const s = secs < 10 ? `0${secs}` : `${secs}`;
-        this.clockEl.textContent = `03:${m}:${s} AM`;
-        this.lastClockSecond = totalSec;
+    if (this.eventManager) this.eventManager.update(delta, this.buildEventContext());
+  }
+
+  /**
+   * Drives the chase audio layer from real AI state: anything actively hunting
+   * the player raises tension, distance lowers it.
+   */
+  updateTension() {
+    if (!this.audio) return;
+    let hunting = false;
+    let nearest = Infinity;
+
+    if (this.monster?.isActive() && !this.monster.isDead) {
+      const s = this.monster.state;
+      if (s === 'CHASE' || s === 'SEARCH' || s === 'HEAR') {
+        hunting = hunting || s === 'CHASE';
+        nearest = Math.min(nearest, this.player.position.distanceTo(this.monster.mesh.position));
+      }
+    }
+    if (this.questManager?.colonel?.isActive() && this.questManager.colonel.state === 'CHASE') {
+      hunting = true;
+      nearest = Math.min(nearest, this.player.position.distanceTo(this.questManager.colonel.mesh.position));
+    }
+    for (const h of this.questManager?.hatchlings || []) {
+      if (h.isActive?.() && h.state === 'CHASE') {
+        hunting = true;
+        nearest = Math.min(nearest, this.player.position.distanceTo(h.mesh.position));
       }
     }
 
-    this.renderer.render(this.scene, this.camera);
+    const intensity = hunting ? THREE.MathUtils.clamp(1 - (nearest - 3) / 18, 0.25, 1) : 0;
+    if (hunting !== this.audio.chaseActive) this.audio.setChase(hunting, intensity);
+    else if (hunting) this.audio.setChase(true, intensity);
+  }
+
+  /** Reuses one context object and its vectors instead of allocating per frame. */
+  buildEventContext() {
+    const ctx = this._eventCtx || (this._eventCtx = {
+      _ballPit: new THREE.Vector3(22, 0, -18),
+      _carPos: new THREE.Vector3(3, 0, -42)
+    });
+    const zone = this.lighting?.getCurrentZone(this.player.position) || 'outdoor';
+    const distBallPit = this.player.position.distanceTo(ctx._ballPit);
+
+    ctx.time = this.gameTime;
+    ctx.phase = this.questManager?.currentStep || 0;
+    ctx.zone = zone;
+    ctx.distToBallPit = distBallPit;
+    ctx.enteredBallPit = distBallPit < 3;
+    ctx.enteredGeneratorRoom = zone === 'basement';
+    ctx.justEnteredCorridor = zone === 'hallway' && this._lastZone !== 'hallway';
+    ctx.nearCar = this.player.position.distanceTo(this.levelBuilder?.carGroup?.position || ctx._carPos) < 5;
+    ctx.isAlone = this.monster
+      ? this.player.position.distanceTo(this.monster.mesh.position) > 14
+      : true;
+    // Real signals, not timers: these are set by the systems that own them and
+    // consumed exactly once here.
+    ctx.seenPortrait = this.questManager?.portraitStares || 0;
+    // Live state, not a lifetime tally: the figure may only cross a feed that
+    // is actually on screen. The old cumulative counter stayed truthy forever
+    // after the first viewing, so the event could fire in an empty office.
+    ctx.watchCCTV = this.questManager?.isWatchingCCTV() === true;
+    ctx.justFueledGenerator = this._pendingGeneratorEvent === true;
+    this._pendingGeneratorEvent = false;
+
+    this._lastZone = zone;
+    return ctx;
+  }
+
+  /** VHS clock. Runs off gameTime so it freezes with the simulation. */
+  updateClock() {
+    if (!this.clockEl) return;
+    const totalSec = Math.floor(this.gameTime);
+    if (totalSec === this.lastClockSecond) return;
+    this.lastClockSecond = totalSec;
+    const mins = Math.floor((14 * 60 + totalSec) / 60) % 60;
+    const secs = (14 * 60 + totalSec) % 60;
+    this.clockEl.textContent =
+      `03:${mins < 10 ? '0' : ''}${mins}:${secs < 10 ? '0' : ''}${secs} AM`;
   }
 }
 
 window.addEventListener('DOMContentLoaded', () => {
-  new Game();
+  const game = new Game();
+  // Both restart buttons run the in-place reset instead of reloading the page.
+  for (const id of ['restart-btn', 'play-again-btn']) {
+    const btn = document.getElementById(id);
+    if (btn) btn.addEventListener('click', () => game.restart());
+  }
 });

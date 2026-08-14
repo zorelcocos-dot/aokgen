@@ -2,20 +2,50 @@ import * as THREE from 'three';
 import { AnimatedSprite } from './AnimatedSprite.js';
 
 /**
- * MonsterEntity - Polished horror AI with full state machine:
- * IDLE, PATROL, INVESTIGATE, HEAR, SEARCH, CHASE, LOST, RETURN, STUNNED, HIDDEN
- * - Hearing radius, line-of-sight cone, search behavior
- * - Footsteps, breathing, occasional growl when close but unseen
- * - No cheap random chasing, motivated by noise and light
+ * MonsterEntity - the chicken and the Colonel share this AI.
+ *
+ * States: HIDDEN, IDLE, PATROL, INVESTIGATE, HEAR, SEARCH, CHASE, LOST,
+ * RETURN, STUNNED. Transitions are validated against TRANSITIONS below, so an
+ * illegal jump (e.g. HIDDEN straight to CHASE) is rejected rather than
+ * silently corrupting the animation track.
+ *
+ * The behaviour is deliberately motivated rather than random: it chases what
+ * it can see or has just heard, searches the last known position when that
+ * fails, gives up on a timer, and walks back to its patrol route.
  */
+
+/** Legal state graph. Anything not listed here is refused by setState(). */
+const TRANSITIONS = {
+  HIDDEN:      ['PATROL', 'IDLE'],
+  IDLE:        ['PATROL', 'INVESTIGATE', 'HEAR', 'CHASE', 'STUNNED', 'HIDDEN'],
+  PATROL:      ['IDLE', 'INVESTIGATE', 'HEAR', 'CHASE', 'STUNNED', 'HIDDEN'],
+  INVESTIGATE: ['SEARCH', 'CHASE', 'HEAR', 'LOST', 'STUNNED', 'HIDDEN'],
+  HEAR:        ['INVESTIGATE', 'CHASE', 'SEARCH', 'STUNNED', 'HIDDEN'],
+  CHASE:       ['SEARCH', 'LOST', 'STUNNED', 'HIDDEN'],
+  SEARCH:      ['CHASE', 'LOST', 'HEAR', 'STUNNED', 'HIDDEN'],
+  LOST:        ['RETURN', 'CHASE', 'INVESTIGATE', 'HEAR', 'STUNNED', 'HIDDEN'],
+  RETURN:      ['PATROL', 'CHASE', 'INVESTIGATE', 'HEAR', 'STUNNED', 'HIDDEN'],
+  STUNNED:     ['SEARCH', 'PATROL', 'CHASE', 'RETURN', 'HIDDEN']
+};
+
+const _toPlayer = new THREE.Vector3();
+const _forward = new THREE.Vector3();
+const _origin = new THREE.Vector3();
+const _target = new THREE.Vector3();
+const _rayDir = new THREE.Vector3();
+const _wander = new THREE.Vector3();
 
 export class MonsterEntity {
   constructor(options) {
     this.scene = options.scene;
     this.audio = options.audio;
     this.type = options.type || 'chicken'; // chicken, colonel
+    // Live shared array; boxes cached per object and refreshed only for
+    // colliders that actually move.
     this.colliders = options.colliders || [];
-    this.colliderBounds = this.colliders.map(o => ({ object: o, box: new THREE.Box3().setFromObject(o) }));
+    this.doorSystem = options.doorSystem || null;
+    this._bounds = new Map();
+    this.frameId = 0;
     this.collisionPoint = new THREE.Vector3();
     this.nextPosition = new THREE.Vector3();
     this.moveDir = new THREE.Vector3();
@@ -85,22 +115,82 @@ export class MonsterEntity {
     // Breathing / footsteps audio timers
     this.breathTimer = 0;
     this.footstepTimer = 0;
+
+    // Spawn pose, kept so reset() can restore it exactly.
+    this.spawnPosition = this.mesh.position.clone();
+    this.isDead = false;
+  }
+
+  /** True when the entity is spawned, visible and allowed to act. */
+  isActive() {
+    return this.mesh.visible && !this.isDead && this.state !== 'HIDDEN';
+  }
+
+  /** Cached, lazily-built AABB for a collider. */
+  getBox(obj) {
+    let entry = this._bounds.get(obj);
+    if (!entry) {
+      obj.updateWorldMatrix(true, false);
+      entry = { box: new THREE.Box3().setFromObject(obj), frame: this.frameId };
+      this._bounds.set(obj, entry);
+      return entry.box;
+    }
+    if (obj.userData?.dynamicCollider && entry.frame !== this.frameId) {
+      entry.frame = this.frameId;
+      obj.updateWorldMatrix(true, false);
+      entry.box.setFromObject(obj);
+    }
+    return entry.box;
+  }
+
+  /** A door wide enough to walk through is not an obstacle. */
+  isOpenDoor(obj) {
+    const name = obj.userData?.doorName;
+    if (!name) return false;
+    return this.doorSystem?.getDoor(name)?.isPassable() ?? false;
+  }
+
+  /** Full restore to the pre-spawn state (used by restart). */
+  reset() {
+    this.mesh.visible = false;
+    this.mesh.position.copy(this.spawnPosition);
+    this.state = 'HIDDEN';
+    this.prevState = 'HIDDEN';
+    this.isDead = false;
+    this.health = this.type === 'colonel' ? 160 : 100;
+    this.stunDuration = 0;
+    this.searchTime = 0;
+    this.lostTime = 0;
+    this.idleTime = 0;
+    this.screechCooldown = 0;
+    this.canSeePlayer = false;
+    this.currentWaypointIndex = 0;
+    this.waypointWait = 0;
+    this.moveDir.set(0, 0, 0);
+    this._bounds.clear();
+  }
+
+  dispose() {
+    this.mesh.parent?.remove(this.mesh);
+    this.sprite.dispose?.();
+    this._bounds.clear();
   }
 
   canMoveTo(x, z) {
     const radius = this.type === 'colonel' ? 0.65 : 0.55;
-    this.collisionPoint.set(x, 1.0, z);
-    for (const entry of this.colliderBounds) {
-      const obj = entry.object;
-      if (!obj?.visible) continue;
-      if (obj.userData?.type === 'freezer_door' && obj.userData.isOpen) continue;
-      if (obj.userData?.type === 'freezer_door' || obj.userData?.type === 'door') entry.box.setFromObject(obj);
+    // Arena bounds - stops the AI grinding into the skybox if it ever slips
+    // past a wall collider.
+    if (x < -33 || x > 33 || z < -34 || z > 30) return false;
+
+    for (const obj of this.colliders) {
+      if (!obj || obj.visible === false) continue;
+      if (this.isOpenDoor(obj)) continue;
+      const box = this.getBox(obj);
+      if (!isFinite(box.min.x)) continue;
       if (
-        this.collisionPoint.x >= entry.box.min.x - radius &&
-        this.collisionPoint.x <= entry.box.max.x + radius &&
-        this.collisionPoint.z >= entry.box.min.z - radius &&
-        this.collisionPoint.z <= entry.box.max.z + radius &&
-        entry.box.max.y >= 0.2 && entry.box.min.y <= 2.6
+        x >= box.min.x - radius && x <= box.max.x + radius &&
+        z >= box.min.z - radius && z <= box.max.z + radius &&
+        box.max.y >= 0.2 && box.min.y <= 2.6
       ) return false;
     }
     return true;
@@ -119,12 +209,15 @@ export class MonsterEntity {
   }
 
   spawn(position) {
+    if (this.mesh.visible) return;   // never spawn the same entity twice
     if (position) this.mesh.position.copy(position);
+    this.spawnPosition.copy(this.mesh.position);
     this.mesh.visible = true;
-    this.state = 'PATROL';
-    this.sprite.playTrack(0, 3, 5);
+    this.isDead = false;
+    this.state = 'HIDDEN';
+    this.setState('PATROL');
     this.returnPos.copy(this.mesh.position);
-    if (this.audio) this.audio.playMonsterScreech(0.38);
+    this.audio?.playMonsterScreech(0.38);
   }
 
   hearNoise(pos, level = 0.5) {
@@ -137,7 +230,7 @@ export class MonsterEntity {
     // If already chasing, update last known
     if (this.state === 'CHASE') {
       this.lastKnownPlayerPos.copy(pos);
-      this.lastKnownTime = performance.now() / 1000;
+      this.lastKnownTime = this.time || 0;
       return;
     }
 
@@ -147,16 +240,23 @@ export class MonsterEntity {
       // Loud close noise -> immediate chase if has some line of sight suspicion
       this.setState('HEAR');
       this.lastKnownPlayerPos.copy(pos);
-      this.lastKnownTime = performance.now() / 1000;
+      this.lastKnownTime = this.time || 0;
     } else {
       this.setState('INVESTIGATE');
     }
   }
 
+  /** Validated transition. Returns false when the move is not legal. */
   setState(newState) {
-    if (this.state === newState) return;
+    if (this.state === newState) return false;
+    const allowed = TRANSITIONS[this.state];
+    if (allowed && !allowed.includes(newState)) return false;
     this.prevState = this.state;
     this.state = newState;
+    // HIDDEN is the only state that hides the mesh, so every exit from it has
+    // to put the body back. Without this, anything that leaves HIDDEN without
+    // going through spawn() becomes an invisible-but-active hunter.
+    if (newState !== 'HIDDEN' && !this.isDead) this.mesh.visible = true;
     // Animation handling
     switch (newState) {
       case 'PATROL':
@@ -190,116 +290,120 @@ export class MonsterEntity {
       case 'STUNNED':
         this.sprite.flashRed(0.35);
         break;
+      case 'HIDDEN':
+        this.mesh.visible = false;
+        break;
     }
-  }
-
-  stun(duration = 2.0) {
-    this.state = 'STUNNED';
-    this.stunDuration = duration;
-    this.sprite.flashRed(0.32);
-  }
-
-  checkLineOfSight(playerPos, camera) {
-    const dist = this.mesh.position.distanceTo(playerPos);
-    if (dist > this.sightRange) {
-      this.canSeePlayer = false;
-      return false;
-    }
-    if (dist < 2.8) {
-      // Very close always sees if not hiding
-      this.canSeePlayer = true;
-      return true;
-    }
-    // FOV check
-    const toPlayer = new THREE.Vector3().subVectors(playerPos, this.mesh.position);
-    toPlayer.y = 0;
-    toPlayer.normalize();
-    const forward = new THREE.Vector3(0, 0, 0);
-    // Use movement direction as forward if moving, else toward last known
-    if (this.moveDir.lengthSq() > 0.001) {
-      forward.copy(this.moveDir);
-    } else {
-      forward.set(Math.sin(Date.now() * 0.0001), 0, Math.cos(Date.now() * 0.0001));
-    }
-    forward.y = 0;
-    forward.normalize();
-    const dot = forward.dot(toPlayer);
-    const angle = Math.acos(THREE.MathUtils.clamp(dot, -1, 1));
-    if (angle > this.sightFOV / 2) {
-      this.canSeePlayer = false;
-      return false;
-    }
-
-    // Simple raycast against colliders (check if wall between)
-    const rayDir = new THREE.Vector3().subVectors(playerPos, this.mesh.position);
-    const rayLen = rayDir.length();
-    rayDir.normalize();
-    // Check colliders for occlusion - cheap AABB ray vs box mid height
-    const midY = 1.2;
-    const origin = new THREE.Vector3(this.mesh.position.x, midY, this.mesh.position.z);
-    const target = new THREE.Vector3(playerPos.x, midY, playerPos.z);
-    const dir = new THREE.Vector3().subVectors(target, origin).normalize();
-    for (const entry of this.colliderBounds) {
-      const obj = entry.object;
-      if (!obj?.visible) continue;
-      if (obj.userData?.type === 'freezer_door' && obj.userData.isOpen) continue;
-      // Ignore small props, only walls
-      if (entry.box.max.y < 0.5) continue;
-      if (entry.box.min.y > 2.6) continue;
-      // Simple intersect test - check if box blocks
-      if (entry.box.min.x === Infinity) continue;
-      // Project onto ray
-      // If box center is between origin and target and close to line -> block
-      const boxCenter = new THREE.Vector3();
-      entry.box.getCenter(boxCenter);
-      const toCenter = new THREE.Vector3().subVectors(boxCenter, origin);
-      const proj = toCenter.dot(dir);
-      if (proj < 0.4 || proj > rayLen - 0.4) continue;
-      const closest = new THREE.Vector3().copy(origin).addScaledVector(dir, proj);
-      const distToLine = closest.distanceTo(boxCenter);
-      // Use box size as thickness for occlusion
-      if (distToLine < 1.2 && entry.box.containsPoint?.(closest)) {
-        // Might be blocking
-        // Extra check: if entry box contains closest point
-        if (closest.x >= entry.box.min.x && closest.x <= entry.box.max.x &&
-            closest.z >= entry.box.min.z && closest.z <= entry.box.max.z) {
-          this.canSeePlayer = false;
-          return false;
-        }
-      }
-    }
-
-    this.canSeePlayer = true;
-    this.lastKnownPlayerPos.copy(playerPos);
-    this.lastKnownTime = performance.now() / 1000;
     return true;
   }
 
-  update(delta, playerPos, camera, flashlightOn, playerNoise = 0, isPlayerHiding = false) {
-    if (!this.mesh.visible) return;
+  stun(duration = 2.0) {
+    if (this.state === 'STUNNED' || !this.isActive()) return false;
+    this.stateBeforeStun = this.state;
+    // Routed through setState so the transition graph stays the single
+    // authority; a raw assignment here skipped the state's entry logic.
+    if (!this.setState('STUNNED')) return false;
+    this.stunDuration = duration;
+    this.sprite.flashRed(0.32);
+    return true;
+  }
 
+  /**
+   * Range -> FOV cone -> occlusion, cheapest test first.
+   * Uses module-level scratch vectors: zero allocation per frame.
+   */
+  checkLineOfSight(playerPos, isPlayerHiding = false) {
+    if (isPlayerHiding) { this.canSeePlayer = false; return false; }
+
+    const dist = this.mesh.position.distanceTo(playerPos);
+    if (dist > this.sightRange) { this.canSeePlayer = false; return false; }
+
+    if (dist > 2.8) {
+      // FOV cone, using facing (movement direction, or last heading).
+      _toPlayer.subVectors(playerPos, this.mesh.position);
+      _toPlayer.y = 0;
+      _toPlayer.normalize();
+      _forward.copy(this.moveDir);
+      _forward.y = 0;
+      if (_forward.lengthSq() < 0.001) _forward.copy(_toPlayer); // standing still: assume facing
+      _forward.normalize();
+      const angle = Math.acos(THREE.MathUtils.clamp(_forward.dot(_toPlayer), -1, 1));
+      if (angle > this.sightFOV / 2) { this.canSeePlayer = false; return false; }
+    }
+
+    if (this.isOccluded(playerPos)) { this.canSeePlayer = false; return false; }
+
+    this.canSeePlayer = true;
+    this.lastKnownPlayerPos.copy(playerPos);
+    this.lastKnownTime = this.time;
+    return true;
+  }
+
+  /** Slab-test the sight ray against wall-height colliders. */
+  isOccluded(playerPos) {
+    const midY = 1.2;
+    _origin.set(this.mesh.position.x, midY, this.mesh.position.z);
+    _target.set(playerPos.x, midY, playerPos.z);
+    _rayDir.subVectors(_target, _origin);
+    const rayLen = _rayDir.length();
+    if (rayLen < 0.001) return false;
+    _rayDir.divideScalar(rayLen);
+
+    const invX = 1 / (_rayDir.x || 1e-8);
+    const invZ = 1 / (_rayDir.z || 1e-8);
+
+    for (const obj of this.colliders) {
+      if (!obj || obj.visible === false) continue;
+      if (this.isOpenDoor(obj)) continue;
+      const box = this.getBox(obj);
+      if (!isFinite(box.min.x)) continue;
+      if (box.max.y < 0.9 || box.min.y > 2.6) continue;   // only tall things block sight
+
+      let t0 = (box.min.x - _origin.x) * invX;
+      let t1 = (box.max.x - _origin.x) * invX;
+      if (t0 > t1) { const t = t0; t0 = t1; t1 = t; }
+
+      let s0 = (box.min.z - _origin.z) * invZ;
+      let s1 = (box.max.z - _origin.z) * invZ;
+      if (s0 > s1) { const t = s0; s0 = s1; s1 = t; }
+
+      const tEnter = Math.max(t0, s0);
+      const tExit = Math.min(t1, s1);
+      if (tEnter <= tExit && tExit > 0.25 && tEnter < rayLen - 0.25) return true;
+    }
+    return false;
+  }
+
+  update(delta, playerPos, camera, flashlightOn, playerNoise = 0, isPlayerHiding = false) {
+    if (!this.isActive()) return;
+
+    this.frameId++;
+    this.time = (this.time || 0) + delta;
     this.sprite.update(delta, camera);
     if (this.screechCooldown > 0) this.screechCooldown -= delta;
     this.breathTimer += delta;
     this.footstepTimer += delta;
 
-    // STUNNED
+    // STUNNED - recovers into a search rather than an instant re-chase, which
+    // is what makes the stun actually worth using.
     if (this.state === 'STUNNED') {
       this.stunDuration -= delta;
       if (this.stunDuration <= 0) {
-        this.setState('CHASE');
+        this.lastKnownPlayerPos.copy(playerPos);
+        this.setState(this.stateBeforeStun === 'CHASE' ? 'SEARCH' : 'PATROL');
       }
       return;
     }
 
     const distToPlayer = this.mesh.position.distanceTo(playerPos);
+    const sees = this.checkLineOfSight(playerPos, isPlayerHiding);
 
     // IDLE wait
     if (this.state === 'IDLE') {
       this.idleTime -= delta;
       if (this.idleTime <= 0) this.setState('PATROL');
       // Still check vision
-      if (this.checkLineOfSight(playerPos, camera) && !isPlayerHiding) {
+      if (sees) {
         this.setState('CHASE');
       }
       return;
@@ -307,26 +411,22 @@ export class MonsterEntity {
 
     // PATROL logic
     if (this.state === 'PATROL') {
-      // Check sight
-      if (this.checkLineOfSight(playerPos, camera) && !isPlayerHiding) {
-        if (distToPlayer < this.sightRange) {
-          this.setState('CHASE');
-          if (this.screechCooldown <= 0) {
-            this.audio?.playMonsterScreech(0.45);
-            this.screechCooldown = 7;
-          }
+      if (sees) {
+        this.setState('CHASE');
+        if (this.screechCooldown <= 0) {
+          this.audio?.playMonsterScreech(0.45);
+          this.screechCooldown = 7;
         }
       } else if (flashlightOn && distToPlayer < this.sightRange * 0.85) {
         // Flashlight may attract if pointed close
-        const toMon = new THREE.Vector3().subVectors(this.mesh.position, playerPos).normalize();
-        const playerForward = new THREE.Vector3();
-        camera.getWorldDirection(playerForward);
-        playerForward.y = 0;
-        playerForward.normalize();
-        const dot = playerForward.dot(toMon);
-        if (dot > 0.75) { // player looking near monster
-          this.hearNoise(playerPos, 0.55);
-        }
+        _toPlayer.subVectors(this.mesh.position, playerPos);
+        _toPlayer.y = 0;
+        _toPlayer.normalize();
+        camera.getWorldDirection(_forward);
+        _forward.y = 0;
+        _forward.normalize();
+        // Beam pointed straight at it: that counts as being noticed.
+        if (_forward.dot(_toPlayer) > 0.75) this.hearNoise(playerPos, 0.55);
       }
 
       const targetWp = this.waypoints[this.currentWaypointIndex];
@@ -365,7 +465,7 @@ export class MonsterEntity {
       if (this.mesh.position.distanceTo(this.investigatePos) < 1.1) {
         this.setState('SEARCH');
       }
-      if (this.checkLineOfSight(playerPos, camera) && !isPlayerHiding) {
+      if (sees) {
         this.setState('CHASE');
       }
 
@@ -373,14 +473,11 @@ export class MonsterEntity {
       // Pause, turn toward noise, then chase
       this.searchTime += delta;
       // Look at noise pos
-      const dir = new THREE.Vector3().subVectors(this.investigatePos, this.mesh.position);
-      dir.y = 0;
-      if (dir.lengthSq() > 0.001) {
-        dir.normalize();
-        this.moveDir.copy(dir);
-      }
+      _forward.subVectors(this.investigatePos, this.mesh.position);
+      _forward.y = 0;
+      if (_forward.lengthSq() > 0.001) this.moveDir.copy(_forward.normalize());
       if (this.searchTime > 0.8) {
-        if (this.checkLineOfSight(playerPos, camera) && !isPlayerHiding) {
+        if (sees) {
           this.setState('CHASE');
         } else if (this.searchTime > 1.6) {
           // Go investigate last known
@@ -391,10 +488,9 @@ export class MonsterEntity {
 
     } else if (this.state === 'CHASE') {
       // Move to player last known, constantly update if seeing
-      if (this.checkLineOfSight(playerPos, camera) && !isPlayerHiding) {
-        this.lastKnownPlayerPos.copy(playerPos);
-        this.lastKnownTime = performance.now() / 1000;
+      if (sees) {
         this.moveToward(playerPos, this.chaseSpeed * delta);
+        this.lostTimer = 0;
       } else {
         // Move toward last known
         this.moveToward(this.lastKnownPlayerPos, this.chaseSpeed * delta);
@@ -403,14 +499,10 @@ export class MonsterEntity {
         }
       }
 
-      // If player hides while chasing and far, may lose
-      if (isPlayerHiding && distToPlayer > 6.5) {
-        if (Math.random() < 0.02) this.setState('SEARCH');
-      }
-
-      if (distToPlayer > this.sightRange * 1.6 && !this.canSeePlayer) {
-        this.setState('LOST');
-      }
+      // Hiding breaks pursuit on a timer, not a per-frame coin flip.
+      this.lostTimer = (this.lostTimer || 0) + delta;
+      if (isPlayerHiding && distToPlayer > 5.5 && this.lostTimer > 2.5) this.setState('SEARCH');
+      if (distToPlayer > this.sightRange * 1.6) this.setState('LOST');
 
       if (this.screechCooldown <= 0 && distToPlayer < 10) {
         this.audio?.playMonsterScreech(0.42);
@@ -426,14 +518,19 @@ export class MonsterEntity {
     } else if (this.state === 'SEARCH') {
       this.searchTime -= delta;
       // Search around last known with small wander
-      const wander = new THREE.Vector3(
-        this.lastKnownPlayerPos.x + (Math.random() - 0.5) * 3.5,
-        0,
-        this.lastKnownPlayerPos.z + (Math.random() - 0.5) * 3.5
-      );
-      this.moveToward(wander, this.searchSpeed * delta);
+      // Re-pick a search point occasionally instead of jittering every frame.
+      this.searchRepick = (this.searchRepick || 0) - delta;
+      if (this.searchRepick <= 0) {
+        this.searchRepick = 1.4 + Math.random();
+        _wander.set(
+          this.lastKnownPlayerPos.x + (Math.random() - 0.5) * 4.5,
+          0,
+          this.lastKnownPlayerPos.z + (Math.random() - 0.5) * 4.5
+        );
+      }
+      this.moveToward(_wander, this.searchSpeed * delta);
 
-      if (this.checkLineOfSight(playerPos, camera) && !isPlayerHiding) {
+      if (sees) {
         this.setState('CHASE');
       } else if (this.searchTime <= 0) {
         this.setState('LOST');
@@ -449,7 +546,7 @@ export class MonsterEntity {
       if (this.lostTime <= 0) {
         this.setState('RETURN');
       }
-      if (this.checkLineOfSight(playerPos, camera) && !isPlayerHiding) {
+      if (sees) {
         this.setState('CHASE');
       }
 
@@ -458,9 +555,7 @@ export class MonsterEntity {
       if (this.mesh.position.distanceTo(this.returnPos) < 0.8) {
         this.setState('PATROL');
       }
-      if (this.checkLineOfSight(playerPos, camera) && distToPlayer < this.sightRange && !isPlayerHiding) {
-        this.setState('CHASE');
-      }
+      if (sees) this.setState('CHASE');
     }
   }
 }

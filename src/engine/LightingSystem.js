@@ -182,7 +182,16 @@ export class LightingSystem {
   }
 
   initFlashlight() {
-    this.flashlight = new THREE.SpotLight(0xfff7e8, 4.8, 32, Math.PI / 4.2, 0.52, 1.3);
+    // Single source of truth for flashlight tuning - the focus beam and the
+    // flicker code both derive from these instead of re-hardcoding numbers.
+    this.flashlightBaseIntensity = 4.8;
+    this.flashlightBaseAngle = Math.PI / 4.2;
+    this.flashlightFocusAngle = Math.PI / 12;
+    this.flashlightFocusBoost = 1.6;
+    this.focusBeamActive = false;
+    this.flashlight = new THREE.SpotLight(
+      0xfff7e8, this.flashlightBaseIntensity, 32, this.flashlightBaseAngle, 0.52, 1.3
+    );
     this.flashlight.position.set(0, 0, 0);
     this.flashlight.castShadow = false;
 
@@ -214,7 +223,21 @@ export class LightingSystem {
   toggleFlashlight() {
     this.flashlightOn = !this.flashlightOn;
     this.flashlight.visible = this.flashlightOn;
+    if (!this.flashlightOn) this.setFocusBeam(false);
     return this.flashlightOn;
+  }
+
+  /** Narrow, brighter beam while the player holds right mouse. */
+  setFocusBeam(active) {
+    if (!this.flashlight || this.focusBeamActive === active) return;
+    this.focusBeamActive = active;
+    this.flashlight.angle = active ? this.flashlightFocusAngle : this.flashlightBaseAngle;
+    this.flashlight.intensity = this.currentFlashlightIntensity();
+  }
+
+  /** Target intensity for the current beam mode. */
+  currentFlashlightIntensity() {
+    return this.flashlightBaseIntensity * (this.focusBeamActive ? this.flashlightFocusBoost : 1);
   }
 
   setBatteryLevel(pct) {
@@ -276,6 +299,7 @@ export class LightingSystem {
 
   powerSurgeSequence() {
     this.powerSurgeTimer = 0;
+    this.powerSurgePhase = -1;
     // Start with blackout then rapid flashes
     this.setPower(false);
   }
@@ -304,16 +328,16 @@ export class LightingSystem {
               this.flashlight.intensity = 0;
               this.flashlightFlickerTimer = 0.12;
             } else {
-              this.flashlight.intensity = 4.8 + Math.random() * 0.6 - 0.3;
+              this.flashlight.intensity = this.currentFlashlightIntensity() + Math.random() * 0.6 - 0.3;
               this.flashlightFlickerTimer = 0.18;
             }
           } else {
             // Normal subtle flicker
             if (Math.random() < 0.018) {
-              this.flashlight.intensity = 1.2 + Math.random() * 0.8;
+              this.flashlight.intensity = this.currentFlashlightIntensity() * 0.3 + Math.random() * 0.8;
               this.flashlightFlickerTimer = 0.06;
             } else {
-              this.flashlight.intensity = 4.8;
+              this.flashlight.intensity = this.currentFlashlightIntensity();
               this.flashlightFlickerTimer = 0.16;
             }
           }
@@ -321,33 +345,37 @@ export class LightingSystem {
       }
     }
 
-    // Power surge sequence
+    // Power surge sequence. Each phase applies its lighting change exactly
+    // once on the frame it is entered - setPower() touches every light in the
+    // level, so calling it per frame was both wasteful and visibly stuttery.
     if (this.powerSurgeTimer >= 0) {
       this.powerSurgeTimer += delta;
       const t = this.powerSurgeTimer;
-      if (t < 0.25) {
-        this.setPower(false);
-      } else if (t < 0.4) {
-        this.fluorescents.forEach(f => { if (f.light) f.light.intensity = f.baseIntensity * 2.2; });
-      } else if (t < 0.55) {
-        this.fluorescents.forEach(f => { if (f.light) f.light.intensity = 0; });
-      } else if (t < 0.7) {
-        this.fluorescents.forEach(f => { if (f.light) f.light.intensity = f.baseIntensity * 1.5; });
-      } else if (t < 1.2) {
-        this.setPower(true);
-        this.generatorBulb.intensity = 2.5;
-      } else {
-        this.generatorBulb.intensity = 1.2;
-        this.powerSurgeTimer = -1;
+      const phase = t < 0.25 ? 0 : t < 0.4 ? 1 : t < 0.55 ? 2 : t < 0.7 ? 3 : t < 1.2 ? 4 : 5;
+      if (phase !== this.powerSurgePhase) {
+        this.powerSurgePhase = phase;
+        switch (phase) {
+          case 0: this.setPower(false); break;
+          case 1: this.fluorescents.forEach(f => { if (f.light) f.light.intensity = f.baseIntensity * 2.2; }); break;
+          case 2: this.fluorescents.forEach(f => { if (f.light) f.light.intensity = 0; }); break;
+          case 3: this.fluorescents.forEach(f => { if (f.light) f.light.intensity = f.baseIntensity * 1.5; }); break;
+          case 4: this.setPower(true); this.generatorBulb.intensity = 2.5; break;
+          default:
+            this.generatorBulb.intensity = 1.2;
+            this.powerSurgeTimer = -1;
+            this.powerSurgePhase = -1;
+            break;
+        }
       }
-      return; // Skip normal flicker during surge
+      return; // Skip normal flicker during the surge
     }
 
     // Flicker burst from events
     let burstFactor = 1;
-    if (this.flickerBurst && this.flickerBurst.time > 0) {
+    if (this.flickerBurst) {
       this.flickerBurst.time -= delta;
-      burstFactor = this.flickerBurst.intensity;
+      if (this.flickerBurst.time <= 0) this.flickerBurst = null;
+      else burstFactor = this.flickerBurst.intensity;
     }
 
     // Fluorescent flicker logic
@@ -387,22 +415,54 @@ export class LightingSystem {
     });
   }
 
+  /**
+   * Zone lookup, derived from the actual wall layout built by LevelBuilder:
+   *   outdoor    z < -30
+   *   playplace  x > 15,  z -30..-4      dining    x -15..15, z -30..-4
+   *   bathroom   x < -15, z -30..-16     janitor   x < -15, z -30..-24
+   *   kitchen    x -14..14, z -4..22     freezer   x > 14,  z 0..22
+   *   office     x < -14, z 0..22        storage   x < -14, z 22..35
+   *   basement   z > 22 (generator room and the dock behind it)
+   */
   getCurrentZone(pos) {
-    // Simple zone detection based on position
     if (!pos) return this.zone;
-    if (pos.z > 20) return 'basement'; // generator/south
-    if (pos.z > 14 && pos.x < -10) return 'office';
-    if (pos.z > 14 && pos.x > 10) return 'freezer'; // Actually vault, but close
-    if (pos.x > 14) {
-      if (pos.z > 0) return 'freezer';
-      else return 'playplace';
+    const { x, z } = pos;
+
+    if (z < -30.2) return 'outdoor';
+
+    if (z < -4) {
+      if (x > 15) return 'playplace';
+      if (x < -15) return z < -24 ? 'janitor' : 'bathroom';
+      return 'dining';
     }
-    if (pos.x < -14) {
-      if (pos.z < -10) return 'bathroom';
-      else return 'storage';
+
+    if (z < 22) {
+      if (x > 14) return 'freezer';
+      if (x < -14) return 'office';
+      // The kitchen's south strip in front of the basement door reads as the
+      // staff corridor, which has its own ambience.
+      return z > 18 ? 'hallway' : 'kitchen';
     }
-    if (pos.z < -2) return 'dining';
-    if (pos.z < 16) return 'kitchen';
-    return 'hallway';
+
+    if (x < -14) return 'storage';
+    return 'basement';
+  }
+
+  /**
+   * Restores the opening lighting state for a restart: power on (exterior),
+   * flashlight off, no surge or burst mid-flight.
+   */
+  reset() {
+    this.powerSurgeTimer = -1;
+    this.powerSurgePhase = -1;
+    this.flickerBurst = null;
+    this.flickerTimer = 0;
+    this.flashlightFlickerTimer = 0;
+    this.lowBatteryFlicker = false;
+    this.flashlightBattery = 100;
+    this.focusBeamActive = false;
+    if (this.flashlightOn) this.toggleFlashlight();
+    this.zone = 'outdoor';
+    this.setPower(true);
   }
 }

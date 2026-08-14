@@ -19,6 +19,12 @@ export class AudioManager {
 
     this.lastFootstep = 0;
     this.isMuted = false;
+
+    // Chase layer state - a single persistent node pair faded in and out,
+    // never re-created, so a chase that starts and stops fifty times still
+    // owns exactly one oscillator.
+    this.chaseActive = false;
+    this.tension = 0;
   }
 
   init() {
@@ -59,6 +65,10 @@ export class AudioManager {
     this.windGain = this.ctx.createGain();
     this.windGain.gain.setValueAtTime(0.22, this.ctx.currentTime);
     this.windGain.connect(this.ambientGain);
+
+    this.chaseGain = this.ctx.createGain();
+    this.chaseGain.gain.setValueAtTime(0.0, this.ctx.currentTime);
+    this.chaseGain.connect(this.musicGain);
   }
 
   resume() {
@@ -74,6 +84,144 @@ export class AudioManager {
     this.startFluorescentHum();
     this.startWhiteNoiseLayer(this.windGain, 180, 0.08, 'wind');
     this.startFryerSizzle();
+    this.startChaseLayer();
+  }
+
+  /**
+   * The chase bed: a detuned pulsing low string. Created once at silence and
+   * only ever faded, so setChase() is safe to call every frame.
+   */
+  startChaseLayer() {
+    if (!this.ctx || this.chaseOsc) return;
+    const osc = this.ctx.createOscillator();
+    const osc2 = this.ctx.createOscillator();
+    const filter = this.ctx.createBiquadFilter();
+    const lfo = this.ctx.createOscillator();
+    const lfoGain = this.ctx.createGain();
+
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(73.4, this.ctx.currentTime);   // D2
+    osc2.type = 'sawtooth';
+    osc2.frequency.setValueAtTime(77.8, this.ctx.currentTime);  // deliberately sour
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(420, this.ctx.currentTime);
+    filter.Q.setValueAtTime(6, this.ctx.currentTime);
+
+    lfo.type = 'sine';
+    lfo.frequency.setValueAtTime(5.2, this.ctx.currentTime);
+    lfoGain.gain.setValueAtTime(180, this.ctx.currentTime);
+    lfo.connect(lfoGain);
+    lfoGain.connect(filter.frequency);
+
+    osc.connect(filter);
+    osc2.connect(filter);
+    filter.connect(this.chaseGain);
+    osc.start(); osc2.start(); lfo.start();
+
+    this.chaseOsc = osc;
+    this.chaseOsc2 = osc2;
+    this.chaseLfo = lfo;
+    this.chaseFilter = filter;
+    this.ambientNodes.push({ osc, type: 'chase' }, { osc: osc2, type: 'chase' }, { osc: lfo, type: 'chase' });
+  }
+
+  /**
+   * Fades the chase bed in or out. `intensity` 0..1 scales both the volume and
+   * the pulse rate, so a distant stalker sounds different from a close one.
+   */
+  setChase(active, intensity = 1) {
+    if (!this.ctx || !this.chaseGain) return;
+    const now = this.ctx.currentTime;
+    const target = active ? 0.18 + intensity * 0.22 : 0.0;
+    this.chaseGain.gain.cancelScheduledValues(now);
+    this.chaseGain.gain.setValueAtTime(this.chaseGain.gain.value, now);
+    this.chaseGain.gain.linearRampToValueAtTime(target, now + (active ? 0.6 : 1.6));
+    if (active && this.chaseLfo) {
+      this.chaseLfo.frequency.linearRampToValueAtTime(3.6 + intensity * 4.4, now + 0.6);
+    }
+    this.chaseActive = active;
+  }
+
+  /**
+   * Kills every looping layer with a short fade. Used by death and victory so
+   * no ambience, chase bed or generator hum survives the state change.
+   */
+  duckAll(fade = 0.9) {
+    if (!this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    this.setChase(false);
+    for (const g of [this.ambientGain, this.windGain, this.fryerGain, this.humGain, this.generatorGain]) {
+      if (!g) continue;
+      g.gain.cancelScheduledValues(now);
+      g.gain.setValueAtTime(g.gain.value, now);
+      g.gain.linearRampToValueAtTime(0.0001, now + fade);
+    }
+  }
+
+  /** Death: everything drops out, one low hit remains. */
+  playDeathTransition() {
+    this.duckAll(0.5);
+    this.playJumpscareStinger(0.9);
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(58, now);
+    osc.frequency.exponentialRampToValueAtTime(24, now + 3.2);
+    gain.gain.setValueAtTime(0.0, now);
+    gain.gain.linearRampToValueAtTime(0.3, now + 0.25);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 3.4);
+    osc.connect(gain);
+    gain.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 3.5);
+  }
+
+  /** Victory: ambience clears, engine and rain remain. */
+  playVictoryTransition() {
+    this.duckAll(1.4);
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    // Rising relief chord, deliberately unresolved.
+    [146.8, 220, 261.6].forEach((f, i) => {
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(f, now);
+      gain.gain.setValueAtTime(0.0, now);
+      gain.gain.linearRampToValueAtTime(0.09, now + 0.6 + i * 0.25);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 5.5);
+      osc.connect(gain);
+      gain.connect(this.masterGain);
+      osc.start(now + i * 0.2);
+      osc.stop(now + 5.6);
+    });
+    this.playRadioStatic(0.22);
+  }
+
+  /**
+   * Restores the mixer to its opening state. Called on restart so run 2 does
+   * not start silent (ducked) or mid-chase.
+   */
+  reset() {
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    this.setGeneratorHum(false);
+    this.setChase(false);
+    const restore = [
+      [this.ambientGain, 0.32], [this.sfxGain, 0.85],
+      [this.musicGain, 0.25], [this.windGain, 0.22],
+      [this.fryerGain, 0.0], [this.humGain, 0.0]
+    ];
+    for (const [g, v] of restore) {
+      if (!g) continue;
+      g.gain.cancelScheduledValues(now);
+      g.gain.setValueAtTime(v, now);
+    }
+    this.activeAmbience = null;   // force the next setAmbienceZone to apply
+    this.footstepMaterial = 'tile';
+    this.tension = 0;
   }
 
   startDrone(freq, type, volume) {
@@ -192,6 +340,37 @@ export class AudioManager {
         this.humGain?.gain.linearRampToValueAtTime(0.06, now + 1);
         this.ambientGain?.gain.linearRampToValueAtTime(0.38, now + 1);
         break;
+      case 'playplace':
+        // Big empty volume: no hum, more room tone.
+        this.windGain?.gain.linearRampToValueAtTime(0.03, now + 1);
+        this.fryerGain?.gain.linearRampToValueAtTime(0.0, now + 1);
+        this.humGain?.gain.linearRampToValueAtTime(0.05, now + 1);
+        this.ambientGain?.gain.linearRampToValueAtTime(0.28, now + 1);
+        break;
+      case 'bathroom':
+      case 'janitor':
+        // Tiled and close: dry, quiet, a single failing ballast.
+        this.windGain?.gain.linearRampToValueAtTime(0.0, now + 0.9);
+        this.fryerGain?.gain.linearRampToValueAtTime(0.0, now + 0.9);
+        this.humGain?.gain.linearRampToValueAtTime(0.22, now + 0.9);
+        this.ambientGain?.gain.linearRampToValueAtTime(0.2, now + 0.9);
+        break;
+      case 'hallway':
+        this.windGain?.gain.linearRampToValueAtTime(0.01, now + 0.9);
+        this.fryerGain?.gain.linearRampToValueAtTime(0.05, now + 0.9);
+        this.humGain?.gain.linearRampToValueAtTime(0.16, now + 0.9);
+        this.ambientGain?.gain.linearRampToValueAtTime(0.26, now + 0.9);
+        break;
+      case 'storage':
+        this.windGain?.gain.linearRampToValueAtTime(0.02, now + 1);
+        this.fryerGain?.gain.linearRampToValueAtTime(0.0, now + 1);
+        this.humGain?.gain.linearRampToValueAtTime(0.08, now + 1);
+        this.ambientGain?.gain.linearRampToValueAtTime(0.3, now + 1);
+        break;
+      default:
+        this.humGain?.gain.linearRampToValueAtTime(0.1, now + 1);
+        this.ambientGain?.gain.linearRampToValueAtTime(0.28, now + 1);
+        break;
     }
   }
 
@@ -211,12 +390,13 @@ export class AudioManager {
     osc.stop(now + decay + 0.05);
   }
 
-  playFootstep(vol = 0.24, surface = this.footstepMaterial) {
+  /**
+   * One footstep thud scheduled on the AudioContext clock. Layered cues use
+   * this directly with a future `at` instead of setTimeout, so a restart that
+   * tears the graph down can never have a stray timer fire into a dead node.
+   */
+  _footstepAt(at, vol, surface) {
     if (!this.ctx || !this.sfxGain) return;
-    const now = this.ctx.currentTime;
-    if (now - this.lastFootstep < 0.18) return;
-    this.lastFootstep = now;
-    // Different surfaces
     let freq = 90;
     if (surface === 'metal') freq = 160;
     if (surface === 'carpet') freq = 55;
@@ -224,20 +404,30 @@ export class AudioManager {
     const osc = this.ctx.createOscillator();
     const gain = this.ctx.createGain();
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(freq + Math.random() * 20, now);
-    osc.frequency.exponentialRampToValueAtTime(freq * 0.35, now + 0.12);
-    gain.gain.setValueAtTime(vol, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+    osc.frequency.setValueAtTime(freq + Math.random() * 20, at);
+    osc.frequency.exponentialRampToValueAtTime(freq * 0.35, at + 0.12);
+    gain.gain.setValueAtTime(vol, at);
+    gain.gain.exponentialRampToValueAtTime(0.001, at + 0.12);
     osc.connect(gain);
     gain.connect(this.sfxGain);
-    osc.start(now);
-    osc.stop(now + 0.13);
+    osc.start(at);
+    osc.stop(at + 0.13);
   }
 
+  playFootstep(vol = 0.24, surface = this.footstepMaterial) {
+    if (!this.ctx || !this.sfxGain) return;
+    const now = this.ctx.currentTime;
+    if (now - this.lastFootstep < 0.18) return;
+    this.lastFootstep = now;
+    this._footstepAt(now, vol, surface);
+  }
+
+  /** Two steps behind the player - scheduled ahead, never throttled away. */
   playFootstepBehind(vol = 0.3) {
-    // Slightly delayed, lower
-    setTimeout(() => this.playFootstep(vol * 0.8, 'concrete'), 80);
-    setTimeout(() => this.playFootstep(vol * 0.6, 'concrete'), 420);
+    if (!this.ctx || !this.sfxGain) return;
+    const now = this.ctx.currentTime;
+    this._footstepAt(now + 0.08, vol * 0.8, 'concrete');
+    this._footstepAt(now + 0.42, vol * 0.6, 'concrete');
   }
 
   playHeartbeat(intensity = 1) {
@@ -275,8 +465,8 @@ export class AudioManager {
     gain.connect(this.sfxGain);
     osc.start(now);
     osc.stop(now + 0.42);
-    // Hinge creak layered
-    setTimeout(() => this.playDoorCreak(vol * 0.6), 80);
+    // Hinge creak layered on the audio clock (no stray timer after a restart)
+    this.playDoorCreak(vol * 0.6, now + 0.08);
   }
 
   playDoorClose(pos, vol = 0.5) {
@@ -296,9 +486,9 @@ export class AudioManager {
     osc.stop(now + 0.22);
   }
 
-  playDoorCreak(vol = 0.4) {
-    if (!this.ctx) return;
-    const now = this.ctx.currentTime;
+  playDoorCreak(vol = 0.4, at = null) {
+    if (!this.ctx || !this.sfxGain) return;
+    const now = at ?? this.ctx.currentTime;
     const osc = this.ctx.createOscillator();
     const gain = this.ctx.createGain();
     osc.type = 'sawtooth';

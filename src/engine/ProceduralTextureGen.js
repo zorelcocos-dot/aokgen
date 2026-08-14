@@ -6,6 +6,32 @@ import * as THREE from 'three';
  * Every sprite is mathematically centered in its uniform grid cell for clean slicing.
  */
 export class ProceduralTextureGen {
+  /**
+   * Every generator below is a pure function of its arguments, but each one
+   * rasterises one or more full-size canvases. Regenerating them (a restart,
+   * a second LevelBuilder, a re-import) burned CPU and leaked GPU memory
+   * because the old THREE.Texture objects were dropped without dispose().
+   * Results are memoised by name + arguments and handed back by reference.
+   */
+  static _cache = new Map();
+
+  static _memo(key, factory) {
+    const hit = this._cache.get(key);
+    if (hit) return hit;
+    const made = factory();
+    this._cache.set(key, made);
+    return made;
+  }
+
+  /** Frees every cached canvas/texture. Call only on teardown. */
+  static disposeCache() {
+    for (const entry of this._cache.values()) {
+      const maps = entry?.isTexture ? [entry] : Object.values(entry || {});
+      for (const m of maps) if (m?.isTexture) m.dispose();
+    }
+    this._cache.clear();
+  }
+
   // ==========================================
   // 1. MUTANT CHICKEN CHIMERA (4x2 Grid = 8 Frames)
   // Row 0: Walk & Stalk Cycle (4 frames)
@@ -13,6 +39,10 @@ export class ProceduralTextureGen {
   // Background: Solid #FF00FF Pink Chroma Key
   // ==========================================
   static generateChickenMonsterSheet() {
+    return this._memo('monsterSheet', () => this._buildChickenMonsterSheet());
+  }
+
+  static _buildChickenMonsterSheet() {
     const frameW = 256;
     const frameH = 256;
     const cols = 4;
@@ -244,6 +274,10 @@ export class ProceduralTextureGen {
   // Background: Solid #FF00FF Pink Chroma Key
   // ==========================================
   static generateColonelStalkerSheet() {
+    return this._memo('colonelSheet', () => this._buildColonelStalkerSheet());
+  }
+
+  static _buildColonelStalkerSheet() {
     const frameW = 256;
     const frameH = 256;
     const cols = 4;
@@ -419,6 +453,10 @@ export class ProceduralTextureGen {
   // Background: Solid #FF00FF Pink Chroma Key
   // ==========================================
   static generateEmployeeHandsSheet() {
+    return this._memo('handsSheet', () => this._buildEmployeeHandsSheet());
+  }
+
+  static _buildEmployeeHandsSheet() {
     const frameW = 512;
     const frameH = 512;
     const cols = 4;
@@ -857,6 +895,10 @@ export class ProceduralTextureGen {
   // Background: Solid #FF00FF Pink Chroma Key
   // ==========================================
   static generateCursedPropsSheet() {
+    return this._memo('propsSheet', () => this._buildCursedPropsSheet());
+  }
+
+  static _buildCursedPropsSheet() {
     const frameW = 128;
     const frameH = 128;
     const cols = 4;
@@ -1059,6 +1101,10 @@ export class ProceduralTextureGen {
   // ==========================================
 
   static createCheckeredFloorPBR(size = 512) {
+    return this._memo(`floorPBR:${size}`, () => this._buildCheckeredFloorPBR(size));
+  }
+
+  static _buildCheckeredFloorPBR(size) {
     const albedoCanvas = document.createElement('canvas');
     albedoCanvas.width = size;
     albedoCanvas.height = size;
@@ -1115,7 +1161,7 @@ export class ProceduralTextureGen {
       rCtx.fill();
     }
 
-    const normalCanvas = this.generateFastNormalMap(size, 2.5);
+    const normalCanvas = this.generateFastNormalMap(albedoCanvas, size, 2.5);
 
     const albedoTex = new THREE.CanvasTexture(albedoCanvas);
     albedoTex.wrapS = THREE.RepeatWrapping;
@@ -1133,6 +1179,10 @@ export class ProceduralTextureGen {
   }
 
   static createStainlessSteelPBR(size = 512) {
+    return this._memo(`metalPBR:${size}`, () => this._buildStainlessSteelPBR(size));
+  }
+
+  static _buildStainlessSteelPBR(size) {
     const albedoCanvas = document.createElement('canvas');
     albedoCanvas.width = size;
     albedoCanvas.height = size;
@@ -1176,7 +1226,7 @@ export class ProceduralTextureGen {
     mCtx.fillStyle = '#e5e5e5';
     mCtx.fillRect(0, 0, size, size);
 
-    const normalCanvas = this.generateFastNormalMap(size, 3.0);
+    const normalCanvas = this.generateFastNormalMap(albedoCanvas, size, 3.0);
 
     const albedoTex = new THREE.CanvasTexture(albedoCanvas);
     albedoTex.wrapS = THREE.RepeatWrapping;
@@ -1198,6 +1248,10 @@ export class ProceduralTextureGen {
   }
 
   static createCeilingPBR(size = 512) {
+    return this._memo(`ceilingPBR:${size}`, () => this._buildCeilingPBR(size));
+  }
+
+  static _buildCeilingPBR(size) {
     const canvas = document.createElement('canvas');
     canvas.width = size;
     canvas.height = size;
@@ -1210,7 +1264,7 @@ export class ProceduralTextureGen {
     ctx.lineWidth = 8;
     ctx.strokeRect(0, 0, size, size);
 
-    const normalCanvas = this.generateFastNormalMap(size, 1.8);
+    const normalCanvas = this.generateFastNormalMap(canvas, size, 1.8);
 
     const albedoTex = new THREE.CanvasTexture(canvas);
     albedoTex.wrapS = THREE.RepeatWrapping;
@@ -1224,6 +1278,10 @@ export class ProceduralTextureGen {
   }
 
   static createMenuBoardTexture(width = 1024, height = 512) {
+    return this._memo(`menuBoard:${width}x${height}`, () => this._buildMenuBoardTexture(width, height));
+  }
+
+  static _buildMenuBoardTexture(width, height) {
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
@@ -1280,6 +1338,10 @@ export class ProceduralTextureGen {
   }
 
   static createFreezerDoorTexture(width = 512, height = 512) {
+    return this._memo(`freezerDoor:${width}x${height}`, () => this._buildFreezerDoorTexture(width, height));
+  }
+
+  static _buildFreezerDoorTexture(width, height) {
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
@@ -1332,15 +1394,62 @@ export class ProceduralTextureGen {
   }
 
   /**
-   * Fast flat normal map generator (avoids heavy Sobel loop freezing)
+   * Derives a tangent-space normal map from a source canvas' luminance.
+   *
+   * This used to return a flat rgb(128,128,255) fill - a normal map that says
+   * "perfectly smooth" while still costing a texture fetch per fragment and a
+   * full-size canvas of memory. Now it does a cheap forward-difference on a
+   * downsampled copy, so the tiles, brushed steel and ceiling panels actually
+   * catch the flashlight.
    */
-  static generateFastNormalMap(size = 512, strength = 2.0) {
-    const canvas = document.createElement('canvas');
-    canvas.width = size;
-    canvas.height = size;
-    const ctx = canvas.getContext('2d');
-    ctx.fillStyle = 'rgb(128, 128, 255)'; // standard tangent-space normal (0, 0, 1)
-    ctx.fillRect(0, 0, size, size);
-    return canvas;
+  static generateFastNormalMap(source, size = 512, strength = 2.0) {
+    // Sampling at a quarter resolution is invisible on a normal map but makes
+    // the gradient pass 16x cheaper.
+    const res = Math.max(64, Math.floor(size / 4));
+
+    const small = document.createElement('canvas');
+    small.width = res;
+    small.height = res;
+    const sCtx = small.getContext('2d', { willReadFrequently: true });
+    sCtx.drawImage(source, 0, 0, res, res);
+
+    const src = sCtx.getImageData(0, 0, res, res).data;
+    const out = sCtx.createImageData(res, res);
+    const dst = out.data;
+
+    // Precompute luminance once instead of three times per neighbour lookup.
+    const lum = new Float32Array(res * res);
+    for (let i = 0; i < res * res; i++) {
+      const o = i * 4;
+      lum[i] = (src[o] * 0.299 + src[o + 1] * 0.587 + src[o + 2] * 0.114) / 255;
+    }
+
+    for (let y = 0; y < res; y++) {
+      for (let x = 0; x < res; x++) {
+        const i = y * res + x;
+        // Wrap at the edges: these textures tile, so clamping would draw a
+        // visible seam along every repeat boundary.
+        const l = lum[y * res + ((x - 1 + res) % res)];
+        const r = lum[y * res + ((x + 1) % res)];
+        const u = lum[((y - 1 + res) % res) * res + x];
+        const d = lum[((y + 1) % res) * res + x];
+
+        let nx = (l - r) * strength;
+        let ny = (u - d) * strength;
+        const nz = 1;
+        const inv = 1 / Math.sqrt(nx * nx + ny * ny + nz * nz);
+        nx *= inv;
+        ny *= inv;
+
+        const o = i * 4;
+        dst[o] = Math.round((nx * 0.5 + 0.5) * 255);
+        dst[o + 1] = Math.round((ny * 0.5 + 0.5) * 255);
+        dst[o + 2] = Math.round((nz * inv * 0.5 + 0.5) * 255);
+        dst[o + 3] = 255;
+      }
+    }
+
+    sCtx.putImageData(out, 0, 0);
+    return small;
   }
 }
