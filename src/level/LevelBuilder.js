@@ -2,20 +2,19 @@ import * as THREE from 'three';
 import { PropFactory } from './PropFactory.js';
 
 /**
- * LevelBuilder constructs the expanded 65m x 65m Horror KFC facility:
- * - Zone 1: Main Dining Hall, Cursed Ball Pit PlayPlace, Restrooms
- * - Zone 2: Industrial Kitchen, Fryer Banks, Rotisserie Ovens, Prep Island
- * - Zone 3: Walk-in Deep Meat Freezer Vault Labyrinth
- * - Zone 4: Manager's Security Office & Surveillance Suite
- * - Zone 5: Sub-Basement Grinder Incubator & Loading Bay
- * - Zone 6: Drive-Thru Window & Rainy Parking Lot
+ * LevelBuilder - Cinematic polished horror level:
+ * Outdoor: Forest road, broken-down car, parking lot, trash, fog
+ * Indoor: Dining, PlayPlace, Restrooms, Kitchen, Hallways,
+ *         Office (security), Storage, Freezer Vault, Generator/Basement,
+ *         Staff corridor, Secret grinder room
+ * Each zone has purpose, coherent props, blood trails, dirt, papers.
  */
+
 export class LevelBuilder {
   constructor(scene, pbrTextures, audio) {
     this.scene = scene;
     this.pbr = pbrTextures;
     this.audio = audio;
-
     this.colliders = [];
     this.initMaterials();
     this.propFactory = new PropFactory(scene, this.materials, audio);
@@ -27,71 +26,60 @@ export class LevelBuilder {
         map: this.pbr.floor.albedo,
         normalMap: this.pbr.floor.normal,
         roughnessMap: this.pbr.floor.roughness,
-        roughness: 0.5,
-        metalness: 0.1
+        roughness: 0.55,
+        metalness: 0.06
       }),
-
+      outdoorFloor: new THREE.MeshStandardMaterial({
+        color: 0x1a1a1e,
+        roughness: 0.92,
+        metalness: 0.02
+      }),
       metal: new THREE.MeshStandardMaterial({
         map: this.pbr.metal.albedo,
         normalMap: this.pbr.metal.normal,
         roughnessMap: this.pbr.metal.roughness,
         metalnessMap: this.pbr.metal.metalness,
-        metalness: 0.85,
-        roughness: 0.35
+        metalness: 0.82,
+        roughness: 0.38
       }),
-
       ceiling: new THREE.MeshStandardMaterial({
         map: this.pbr.ceiling.albedo,
         normalMap: this.pbr.ceiling.normal,
-        roughness: 0.8
+        roughness: 0.85
       }),
-
-      diningWall: new THREE.MeshStandardMaterial({
-        color: 0x4a1818,
-        roughness: 0.7
-      }),
-
-      menuBoard: new THREE.MeshBasicMaterial({
-        map: this.pbr.menu
-      }),
-
-      freezerDoor: new THREE.MeshStandardMaterial({
-        map: this.pbr.freezerDoor,
-        roughness: 0.3,
-        metalness: 0.8
-      }),
-
-      glass: new THREE.MeshStandardMaterial({
-        color: 0x88ccff,
-        roughness: 0.05,
-        metalness: 0.1,
-        transparent: true,
-        opacity: 0.55
-      }),
-
-      tileWall: new THREE.MeshStandardMaterial({
-        color: 0x1e293b,
-        roughness: 0.3,
-        metalness: 0.1
-      })
+      diningWall: new THREE.MeshStandardMaterial({ color: 0x3f1616, roughness: 0.78 }),
+      dirtyWall: new THREE.MeshStandardMaterial({ color: 0x2b2621, roughness: 0.9 }),
+      tileWall: new THREE.MeshStandardMaterial({ color: 0x1f2a38, roughness: 0.35, metalness: 0.08 }),
+      officeWall: new THREE.MeshStandardMaterial({ color: 0xc1b8a6, roughness: 0.85 }),
+      forestGround: new THREE.MeshStandardMaterial({ color: 0x12140e, roughness: 1.0 }),
+      menuBoard: new THREE.MeshBasicMaterial({ map: this.pbr.menu }),
+      freezerDoor: new THREE.MeshStandardMaterial({ map: this.pbr.freezerDoor, roughness: 0.32, metalness: 0.72 }),
+      glass: new THREE.MeshStandardMaterial({ color: 0x88ccff, roughness: 0.08, metalness: 0.05, transparent: true, opacity: 0.48 }),
+      concrete: new THREE.MeshStandardMaterial({ color: 0x3c3c3d, roughness: 0.9 })
     };
 
-    this.pbr.floor.albedo.repeat.set(24, 24);
-    this.pbr.floor.normal.repeat.set(24, 24);
-    this.pbr.floor.roughness.repeat.set(24, 24);
-
-    this.pbr.metal.albedo.repeat.set(8, 2);
-    this.pbr.metal.normal.repeat.set(8, 2);
-    this.pbr.metal.roughness.repeat.set(8, 2);
-    this.pbr.metal.metalness.repeat.set(8, 2);
-
-    this.pbr.ceiling.albedo.repeat.set(20, 20);
-    this.pbr.ceiling.normal.repeat.set(20, 20);
+    if (this.pbr.floor.albedo) {
+      this.pbr.floor.albedo.repeat.set(28, 32);
+      this.pbr.floor.normal.repeat.set(28, 32);
+      this.pbr.floor.roughness.repeat.set(28, 32);
+    }
+    if (this.pbr.metal.albedo) {
+      this.pbr.metal.albedo.repeat.set(10, 3);
+      this.pbr.metal.normal.repeat.set(10, 3);
+    }
+    if (this.pbr.ceiling.albedo) {
+      this.pbr.ceiling.albedo.repeat.set(24, 28);
+    }
   }
 
   build() {
+    this.buildOutdoor();
     this.buildArchitecture();
     this.buildProps();
+    this.buildEnvironmentalStorytelling();
+    this.buildHidingSpots();
+    this.buildDecalsAndDirt();
+
     return {
       colliders: this.colliders,
       interactables: this.propFactory.interactables,
@@ -99,11 +87,100 @@ export class LevelBuilder {
     };
   }
 
-  buildArchitecture() {
-    const wallThickness = 0.4;
-    const roomHeight = 4.2;
+  // --- OUTDOOR ---
+  buildOutdoor() {
+    // Main outdoor ground extends north to -60
+    const outFloorGeo = new THREE.PlaneGeometry(80, 90);
+    const outFloor = new THREE.Mesh(outFloorGeo, this.materials.outdoorFloor);
+    outFloor.rotation.x = -Math.PI / 2;
+    outFloor.position.set(0, 0, -32);
+    outFloor.receiveShadow = true;
+    this.scene.add(outFloor);
 
-    // --- Expanded Main Floor (60m x 70m, Z: -30 to 35, X: -30 to 30) ---
+    // Asphalt parking with lines
+    const parkingGeo = new THREE.PlaneGeometry(34, 28);
+    const parking = new THREE.Mesh(parkingGeo, new THREE.MeshStandardMaterial({ color: 0x161619, roughness: 0.85 }));
+    parking.rotation.x = -Math.PI / 2;
+    parking.position.set(0, 0.01, -34);
+    parking.receiveShadow = true;
+    this.scene.add(parking);
+
+    // Parking lines (white)
+    for (let i = -3; i <= 3; i++) {
+      if (i === 0) continue;
+      const line = new THREE.Mesh(
+        new THREE.BoxGeometry(0.14, 0.02, 8),
+        new THREE.MeshStandardMaterial({ color: 0xdddddd })
+      );
+      line.position.set(i * 3.2, 0.02, -34);
+      this.scene.add(line);
+    }
+
+    // Road north
+    const roadGeo = new THREE.PlaneGeometry(12, 40);
+    const road = new THREE.Mesh(roadGeo, new THREE.MeshStandardMaterial({ color: 0x0f0f12, roughness: 0.9 }));
+    road.rotation.x = -Math.PI / 2;
+    road.position.set(0, 0.02, -68);
+    this.scene.add(road);
+
+    // Road center line dashed yellow
+    for (let z = -88; z < -48; z += 4) {
+      const dash = new THREE.Mesh(
+        new THREE.BoxGeometry(0.22, 0.03, 1.6),
+        new THREE.MeshBasicMaterial({ color: 0xeab308 })
+      );
+      dash.position.set(0, 0.03, z);
+      this.scene.add(dash);
+    }
+
+    // Forest tree walls (simple billboards / cylinders for performance)
+    this.addForestRing();
+
+    // Trash, debris outdoors
+    const debrisMat = new THREE.MeshStandardMaterial({ color: 0x3a3a3a });
+    for (let i = 0; i < 24; i++) {
+      const box = new THREE.Mesh(new THREE.BoxGeometry(0.2 + Math.random() * 0.4, 0.15, 0.2), debrisMat);
+      box.position.set(
+        (Math.random() - 0.5) * 46,
+        0.08,
+        -28 - Math.random() * 34
+      );
+      box.rotation.y = Math.random() * Math.PI;
+      this.scene.add(box);
+    }
+  }
+
+  addForestRing() {
+    // Create forest as distant planes + simple trunks around perimeter
+    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x191412, roughness: 0.95 });
+    const leavesMat = new THREE.MeshStandardMaterial({ color: 0x0e1a10, roughness: 0.9 });
+
+    // Ring positions far outside
+    for (let i = 0; i < 60; i++) {
+      const angle = (i / 60) * Math.PI * 2;
+      const radius = 42 + Math.random() * 16;
+      const x = Math.cos(angle) * radius;
+      const z = Math.sin(angle) * radius - 32;
+      // Skip gap at front entrance to restaurant
+      if (Math.abs(x) < 6 && z > -36 && z < -28) continue;
+
+      const h = 5 + Math.random() * 5;
+      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.28, h, 6), trunkMat);
+      trunk.position.set(x, h / 2, z);
+      this.scene.add(trunk);
+      // Leaves blob
+      const leaves = new THREE.Mesh(new THREE.SphereGeometry(0.9 + Math.random() * 0.7, 6, 5), leavesMat);
+      leaves.position.set(x, h - 0.2, z);
+      this.scene.add(leaves);
+    }
+  }
+
+  // --- ARCHITECTURE INDOOR ---
+  buildArchitecture() {
+    const wallThickness = 0.38;
+    const roomHeight = 4.25;
+
+    // Main floor interior (dining + etc)
     const floorGeo = new THREE.PlaneGeometry(60, 70);
     const floor = new THREE.Mesh(floorGeo, this.materials.floor);
     floor.rotation.x = -Math.PI / 2;
@@ -111,116 +188,121 @@ export class LevelBuilder {
     floor.receiveShadow = true;
     this.scene.add(floor);
 
-    // --- Ceiling ---
+    // Ceiling
     const ceilingGeo = new THREE.PlaneGeometry(60, 70);
     const ceiling = new THREE.Mesh(ceilingGeo, this.materials.ceiling);
     ceiling.rotation.x = Math.PI / 2;
     ceiling.position.set(0, roomHeight, 2.5);
     this.scene.add(ceiling);
 
-    // ==========================================
-    // 1. EXTERIOR BOUNDARY WALLS
-    // ==========================================
-    // North Wall (Front facade, Z = -30)
-    this.createWall(0, roomHeight / 2, -30, 60, roomHeight, wallThickness, this.materials.diningWall);
-    // South Wall (Back dock & loading bay, Z = 35)
+    // Exterior walls (restaurant shell)
+    // North wall (front facade) with entrance door gap (X -2 to 2)
+    this.createWall(-15, roomHeight / 2, -30, 26, roomHeight, wallThickness, this.materials.diningWall); // west part
+    this.createWall(15, roomHeight / 2, -30, 26, roomHeight, wallThickness, this.materials.diningWall); // east part
+    this.createWall(0, 3.6, -30, 4.0, 1.2, wallThickness, this.materials.diningWall); // lintel over entrance
+
+    // Entrance frame (visual)
+    const entranceFrameMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1e });
+    this.createWall(-2, roomHeight / 2, -30, 0.25, roomHeight, wallThickness, entranceFrameMat);
+    this.createWall(2, roomHeight / 2, -30, 0.25, roomHeight, wallThickness, entranceFrameMat);
+
+    // South wall back dock Z=35
     this.createWall(0, roomHeight / 2, 35, 60, roomHeight, wallThickness, this.materials.metal);
-    // East Wall (Full perimeter, X = 30)
+    // East wall X=30
     this.createWall(30, roomHeight / 2, 2.5, wallThickness, roomHeight, 70, this.materials.metal);
-    // West Wall (with Drive-Thru Window Cutout at Z: 4 to 6)
-    this.createWall(-30, roomHeight / 2, -13, wallThickness, roomHeight, 34, this.materials.metal); // Z: -30 to 4
-    this.createWall(-30, roomHeight / 2, 20.5, wallThickness, roomHeight, 29, this.materials.metal); // Z: 6 to 35
-    this.createWall(-30, 0.5, 5, wallThickness, 1.0, 2.0, this.materials.metal); // Sill
-    this.createWall(-30, 3.6, 5, wallThickness, 1.2, 2.0, this.materials.metal); // Lintel
+    // West wall with drive-thru window gap Z 4-6 and front entrance
+    this.createWall(-30, roomHeight / 2, -14, wallThickness, roomHeight, 32, this.materials.metal); // -30 to 2
+    this.createWall(-30, roomHeight / 2, 18, wallThickness, roomHeight, 34, this.materials.metal); // 6 to 35
+    this.createWall(-30, 0.5, 5, wallThickness, 1.0, 2.4, this.materials.metal); // sill
+    this.createWall(-30, 3.6, 5, wallThickness, 1.2, 2.4, this.materials.metal); // lintel
 
-    // ==========================================
-    // 2. ZONE 1: FRONT DINING WING (Z: -30 to -4)
-    // ==========================================
-    // Dividing Wall between Dining Room and Kitchen (Z = -4) with Center Service Passage Opening (X: -3 to 3)
-    this.createWall(-18, roomHeight / 2, -4, 24, roomHeight, wallThickness, this.materials.metal); // X: -30 to -6
-    this.createWall(18, roomHeight / 2, -4, 24, roomHeight, wallThickness, this.materials.metal);  // X: 6 to 30
-    this.createWall(0, 3.6, -4, 6.0, 1.2, wallThickness, this.materials.metal); // Top Lintel over service opening
+    // Interior zoning:
 
-    // Menu Board mounted above front service counter opening
-    const menuGeo = new THREE.BoxGeometry(6.0, 1.15, 0.2);
+    // 1. Dining vs Kitchen divider Z = -4 with service opening -3 to 3
+    this.createWall(-18, roomHeight / 2, -4, 24, roomHeight, wallThickness, this.materials.metal);
+    this.createWall(18, roomHeight / 2, -4, 24, roomHeight, wallThickness, this.materials.metal);
+    this.createWall(0, 3.6, -4, 6.0, 1.2, wallThickness, this.materials.metal);
+
+    // Menu board above
+    const menuGeo = new THREE.BoxGeometry(6.2, 1.2, 0.2);
     const menu = new THREE.Mesh(menuGeo, this.materials.menuBoard);
-    menu.position.set(0, 3.15, -3.9);
+    menu.position.set(0, 3.18, -3.9);
     this.scene.add(menu);
 
-    // --- Cursed PlayPlace Ball Pit Room (East Wing: X: 15 to 30, Z: -30 to -4) ---
-    // Wall separating PlayPlace from Dining Room (X = 15) with Archway Door (Z: -16 to -14)
+    // 2. PlayPlace east separation X=15 Z -30 to -4 with archway
     this.createWall(15, roomHeight / 2, -23, wallThickness, roomHeight, 14, this.materials.diningWall);
     this.createWall(15, roomHeight / 2, -9, wallThickness, roomHeight, 10, this.materials.diningWall);
     this.createWall(15, 3.6, -15, wallThickness, 1.2, 2.0, this.materials.diningWall);
 
-    // --- Restrooms (West Wing: X: -30 to -15, Z: -30 to -16) ---
-    this.createWall(-22.5, roomHeight / 2, -16, 15, roomHeight, wallThickness, this.materials.tileWall); // South Restroom Wall
-    this.createWall(-15, roomHeight / 2, -24, wallThickness, roomHeight, 12, this.materials.tileWall); // East Restroom Wall
-    this.createWall(-15, 3.6, -17, wallThickness, 1.2, 2.0, this.materials.tileWall);
+    // 3. Restrooms west separation X -15? Actually restroom enclosure
+    // Restrooms west: X -30 to -15, Z -30 to -16
+    this.createWall(-22.5, roomHeight / 2, -16, 15, roomHeight, wallThickness, this.materials.tileWall);
+    this.createWall(-15, roomHeight / 2, -26, wallThickness, roomHeight, 14, this.materials.tileWall);
+    this.createWall(-15, 3.6, -18, wallThickness, 1.2, 2.2, this.materials.tileWall);
+    // Inner restroom divider (separate janitor closet and toilets)
+    this.createWall(-22.5, roomHeight / 2, -24, 15, roomHeight, wallThickness, this.materials.tileWall);
+    // Creates janitor closet at -22.5, -28
+    // Door for janitor closet (handled later as door)
+    this.createWall(-22.5, roomHeight / 2, -30, 5, roomHeight, wallThickness, this.materials.tileWall); // northmost? already exterior but ensure
 
-    // ==========================================
-    // 3. ZONE 3: WALK-IN FREEZER VAULT (East: X: 14 to 30, Z: 0 to 22)
-    // ==========================================
-    // North Wall of Freezer (Z = 0)
+    // 4. Walk-in Freezer Vault east X 14 to 30, Z 0 to 22
     this.createWall(22, roomHeight / 2, 0, 16, roomHeight, wallThickness, this.materials.metal);
-    // South Wall of Freezer (Z = 22)
     this.createWall(22, roomHeight / 2, 22, 16, roomHeight, wallThickness, this.materials.metal);
-    // West Wall of Freezer (X = 14) with Doorway at Z: 10 to 12
+    // West wall X=14 with doorway Z 10-12
     this.createWall(14, roomHeight / 2, 5, wallThickness, roomHeight, 10, this.materials.metal);
     this.createWall(14, roomHeight / 2, 17, wallThickness, roomHeight, 10, this.materials.metal);
     this.createWall(14, 3.6, 11, wallThickness, 1.2, 2.0, this.materials.metal);
 
-    // Heavy Walk-in Freezer Vault Door (Interactive)
-    const doorGeo = new THREE.BoxGeometry(0.2, 3.0, 2.0);
-    this.freezerDoorMesh = new THREE.Mesh(doorGeo, this.materials.freezerDoor);
-    this.freezerDoorMesh.position.set(14, 1.5, 11);
-    this.freezerDoorMesh.castShadow = true;
-    this.freezerDoorMesh.userData = {
-      type: 'freezer_door',
-      isLocked: true,
-      isOpen: false
-    };
-    this.propFactory.interactables.push(this.freezerDoorMesh);
-    this.colliders.push(this.freezerDoorMesh);
-    this.scene.add(this.freezerDoorMesh);
+    // Freezer internal shelves to create maze feeling
+    this.createWall(20, 1.2, 7, 0.3, 2.4, 6, this.materials.metal);
+    this.createWall(24, 1.2, 13, 0.3, 2.4, 6, this.materials.metal);
 
-    // Yellow hazard frame
-    const frameGeo = new THREE.BoxGeometry(0.25, 3.1, 0.15);
-    const frameMat = new THREE.MeshBasicMaterial({ color: 0xeab308 });
-    const fLeft = new THREE.Mesh(frameGeo, frameMat);
-    fLeft.position.set(14, 1.5, 10);
-    const fRight = new THREE.Mesh(frameGeo, frameMat);
-    fRight.position.set(14, 1.5, 12);
-    this.scene.add(fLeft);
-    this.scene.add(fRight);
-
-    // ==========================================
-    // 4. ZONE 4: MANAGER'S OFFICE & SURVEILLANCE (West: X: -30 to -14, Z: 0 to 22)
-    // ==========================================
-    // North Wall of Office (Z = 0)
-    this.createWall(-22, roomHeight / 2, 0, 16, roomHeight, wallThickness, this.materials.metal);
-    // South Wall of Office (Z = 22)
-    this.createWall(-22, roomHeight / 2, 22, 16, roomHeight, wallThickness, this.materials.metal);
-    // East Wall of Office (X = -14) with Doorway at Z: 10 to 12
+    // 5. Manager Office west X -30 to -14, Z 0 to 22
+    this.createWall(-22, roomHeight / 2, 0, 16, roomHeight, wallThickness, this.materials.officeWall);
+    this.createWall(-22, roomHeight / 2, 22, 16, roomHeight, wallThickness, this.materials.officeWall);
     this.createWall(-14, roomHeight / 2, 5, wallThickness, roomHeight, 10, this.materials.metal);
     this.createWall(-14, roomHeight / 2, 17, wallThickness, roomHeight, 10, this.materials.metal);
     this.createWall(-14, 3.6, 11, wallThickness, 1.2, 2.0, this.materials.metal);
 
-    const oFrameMat = new THREE.MeshBasicMaterial({ color: 0x94a3b8 });
-    const oLeft = new THREE.Mesh(new THREE.BoxGeometry(0.15, 3.1, 0.15), oFrameMat);
-    oLeft.position.set(-14, 1.5, 10);
-    const oRight = new THREE.Mesh(new THREE.BoxGeometry(0.15, 3.1, 0.15), oFrameMat);
-    oRight.position.set(-14, 1.5, 12);
-    this.scene.add(oLeft);
-    this.scene.add(oRight);
-
-    // ==========================================
-    // 5. ZONE 5: SOUTH PROCESSING CELLAR & DOCK (Z: 22 to 35, X: -30 to 30)
-    // ==========================================
-    // Dividing Wall between Kitchen and South Cellar (Z = 22, X: -14 to 14) with Archway at X: -2 to 2
+    // 6. South divider Kitchen vs Basement Z=22 X -14 to 14 with opening -2 to 2
     this.createWall(-8, roomHeight / 2, 22, 12, roomHeight, wallThickness, this.materials.metal);
     this.createWall(8, roomHeight / 2, 22, 12, roomHeight, wallThickness, this.materials.metal);
     this.createWall(0, 3.6, 22, 4.0, 1.2, wallThickness, this.materials.metal);
+
+    // 7. Storage room southwest divider? Create wall to separate storage from office corridor
+    this.createWall(-22, roomHeight / 2, 22, 0.3, 2.8, 0.3, this.materials.dirtyWall); // placeholder?
+
+    // 8. Generator room enclosure southeast X -2 to 8, Z 24 to 35
+    this.createWall(-2, roomHeight / 2, 26, wallThickness, roomHeight, 8, this.materials.metal);
+    this.createWall(8, roomHeight / 2, 26, wallThickness, roomHeight, 8, this.materials.metal);
+    // Already south wall is at 35, need internal garage walls
+    this.createWall(3, roomHeight / 2, 33, 10.2, roomHeight, wallThickness, this.materials.metal);
+
+    // 9. Hallway walls for staff corridor between freezer and office?
+    // Actually hallway central Z 22 east-west already, but add corridor walls to guide.
+
+    // Secret grinder room hidden behind generator (southmost) accessible via vent or hidden door
+    // Wall to hide secret: at Z 34, from X -2 to 2 create false wall that looks like real but has hidden prompt
+    this.createWall(0, roomHeight / 2, 33.8, 4.5, roomHeight, wallThickness, this.materials.dirtyWall);
+
+    // Heavy walk-in freezer vault door (animated, requires keycard)
+    const freezerDoorGeo = new THREE.BoxGeometry(0.22, 3.0, 2.2);
+    this.freezerDoorMesh = new THREE.Mesh(freezerDoorGeo, this.materials.freezerDoor);
+    this.freezerDoorMesh.position.set(14, 1.5, 11);
+    this.freezerDoorMesh.castShadow = true;
+    this.freezerDoorMesh.userData = { type: 'freezer_door', isLocked: true, isOpen: false };
+    this.propFactory.interactables.push(this.freezerDoorMesh);
+    this.colliders.push(this.freezerDoorMesh);
+    this.scene.add(this.freezerDoorMesh);
+
+    // Hazard stripes frame
+    const fMat = new THREE.MeshBasicMaterial({ color: 0xeab308 });
+    const fL = new THREE.Mesh(new THREE.BoxGeometry(0.25, 3.1, 0.15), fMat);
+    fL.position.set(14, 1.5, 10);
+    const fR = new THREE.Mesh(new THREE.BoxGeometry(0.25, 3.1, 0.15), fMat);
+    fR.position.set(14, 1.5, 12);
+    this.scene.add(fL);
+    this.scene.add(fR);
   }
 
   createWall(x, y, z, width, height, depth, material) {
@@ -234,10 +316,10 @@ export class LevelBuilder {
     return wall;
   }
 
-  createCollisionProxy(x, y, z, width, height, depth) {
+  createCollisionProxy(x, y, z, w, h, d) {
     const proxy = new THREE.Mesh(
-      new THREE.BoxGeometry(width, height, depth),
-      new THREE.MeshBasicMaterial({ visible: false })
+      new THREE.BoxGeometry(w, h, d),
+      new THREE.MeshBasicMaterial({ visible: false, depthWrite: false })
     );
     proxy.position.set(x, y, z);
     proxy.updateMatrixWorld(true);
@@ -246,228 +328,510 @@ export class LevelBuilder {
   }
 
   buildProps() {
-    // 1. Service Counter with Cash Registers (Front counter, Z = -4.5)
+    // Service Counter front
     this.propFactory.createServiceCounter(0, 0, -4.5);
     this.createCollisionProxy(-2.85, 0.55, -4.5, 4.35, 1.1, 1.2);
     this.createCollisionProxy(2.85, 0.55, -4.5, 4.35, 1.1, 1.2);
 
-    // 2. Dining Booths (6 clusters in Dining Hall)
+    // Dining Booths 6 clusters with variation
     const boothConfigs = [
-      { x: -8, z: -22, rot: Math.PI / 2 },
-      { x: -8, z: -14, rot: Math.PI / 2 },
-      { x: -8, z: -8,  rot: Math.PI / 2 },
-      { x: 8,  z: -22, rot: -Math.PI / 2 },
-      { x: 8,  z: -14, rot: -Math.PI / 2 },
-      { x: 8,  z: -8,  rot: -Math.PI / 2 }
+      { x: -8, z: -22, rot: Math.PI / 2, broken: false },
+      { x: -8, z: -14, rot: Math.PI / 2, broken: true }, // flipped chair tells story
+      { x: -8, z: -8, rot: Math.PI / 2, broken: false },
+      { x: 8, z: -22, rot: -Math.PI / 2, broken: false },
+      { x: 8, z: -14, rot: -Math.PI / 2, broken: false },
+      { x: 8, z: -8, rot: -Math.PI / 2, broken: true }
     ];
-
     boothConfigs.forEach(b => {
-      this.propFactory.createDiningBooth(b.x, 0, b.z, b.rot);
+      this.propFactory.createDiningBooth(b.x, 0, b.z, b.rot, b.broken);
       this.createCollisionProxy(b.x, 0.5, b.z, 2.0, 1.0, 2.6);
     });
 
-    // 3. Deep Fryer Bank in Kitchen (X: -4, Z: 4)
+    // Kitchen
     this.fryerStation = this.propFactory.createDeepFryerBank(-4, 0, 4);
     this.createCollisionProxy(-4, 0.6, 4, 3.6, 1.2, 1.2);
 
-    // 4. Rotisserie Ovens in Kitchen (X: 4, Z: 4 and Z: 8)
     this.propFactory.createRotisserieOven(4, 0, 4);
-    this.propFactory.createRotisserieOven(4, 0, 8);
+    this.propFactory.createRotisserieOven(4, 0, 8.5);
     this.createCollisionProxy(4, 1.1, 4, 1.6, 2.2, 1.2);
-    this.createCollisionProxy(4, 1.1, 8, 1.6, 2.2, 1.2);
+    this.createCollisionProxy(4, 1.1, 8.5, 1.6, 2.2, 1.2);
 
-    // 5. Stainless Prep Island Table in Kitchen Center
-    const prepTableGeo = new THREE.BoxGeometry(4.0, 1.0, 1.6);
+    // Prep island
+    const prepTableGeo = new THREE.BoxGeometry(4.2, 1.0, 1.8);
     const prepTable = new THREE.Mesh(prepTableGeo, this.materials.metal);
     prepTable.position.set(0, 0.5, 10);
     prepTable.castShadow = true;
     this.scene.add(prepTable);
     this.colliders.push(prepTable);
 
-    // 6. Interactive Grease Spills
+    // Grease spills
     this.greaseSpills = [
-      this.propFactory.createGreaseSpill(-4, 0, 6.0),
-      this.propFactory.createGreaseSpill(2, 0, 6.0),
-      this.propFactory.createGreaseSpill(0, 0, -12.0)
+      this.propFactory.createGreaseSpill(-4, 0, 6.4),
+      this.propFactory.createGreaseSpill(1.2, 0, 5.6),
+      this.propFactory.createGreaseSpill(0, 0, -13)
     ];
     this.greaseSpill = this.greaseSpills[0];
 
-    // 7. Interactive Circuit Breaker Box #1 in Manager's Office (X: -29.7, Z: 14)
-    this.breakerBox = this.propFactory.createBreakerBox(-29.7, 2.0, 14, Math.PI / 2);
+    // Breaker box in manager office + also in generator room
+    this.breakerBox = this.propFactory.createBreakerBox(-29.6, 2.0, 14, Math.PI / 2);
+    this.generatorBreaker = this.propFactory.createBreakerBox(7.7, 2.0, 26, 0);
 
-    // 8. High Detail Commercial Janitor Mop Bucket near Service Counter
-    this.mopBucket = this.propFactory.createMopBucket(-5, 0, -3.2);
+    // Mop bucket
+    this.mopBucket = this.propFactory.createMopBucket(-5.2, 0, -3.2);
 
-    // 9. HIGH-VISIBILITY 3D DRIVE-THRU WINDOW ASSEMBLY on West Wall (X: -30, Z: 5)
+    // Drive-thru window assembly
+    this.buildDriveThruWindow();
+
+    // Ball pit
+    this.buildBallPit();
+
+    // Generator
+    this.buildGenerator();
+
+    // Car exterior
+    this.buildExteriorCar();
+
+    // Manager office desk, computers, cctv
+    this.buildOffice();
+
+    // Restrooms sinks, mirrors
+    this.buildRestrooms();
+
+    // Storage shelves
+    this.buildStorageRoom();
+
+    // Posters (environmental)
+    this.buildPostersAndPortraits();
+
+    // Security CCTV monitors
+    this.buildCCTVWall();
+  }
+
+  buildDriveThruWindow() {
     const dtGroup = new THREE.Group();
     dtGroup.position.set(-30.0, 2.0, 5.0);
 
     const dtFrame = new THREE.Mesh(
-      new THREE.BoxGeometry(0.35, 2.0, 2.0),
-      new THREE.MeshStandardMaterial({ color: 0xb91c1c, roughness: 0.3, metalness: 0.6 })
+      new THREE.BoxGeometry(0.35, 2.2, 2.6),
+      new THREE.MeshStandardMaterial({ color: 0xb91c1c, roughness: 0.32, metalness: 0.55 })
     );
     dtGroup.add(dtFrame);
 
     this.dtWindow = new THREE.Mesh(
-      new THREE.BoxGeometry(0.08, 1.8, 1.8),
+      new THREE.BoxGeometry(0.08, 1.9, 1.9),
       this.materials.glass
     );
     this.dtWindow.userData = { type: 'drive_thru_window', isOpen: false };
     dtGroup.add(this.dtWindow);
     this.propFactory.interactables.push(this.dtWindow);
 
-    // Glowing Neon Sign
+    // Glowing sign
     const sign = new THREE.Mesh(
-      new THREE.BoxGeometry(0.2, 0.45, 1.8),
+      new THREE.BoxGeometry(0.18, 0.48, 2.0),
       new THREE.MeshBasicMaterial({ color: 0xfef08a })
     );
-    sign.position.set(0.15, 1.25, 0);
+    sign.position.set(0.15, 1.35, 0);
     dtGroup.add(sign);
 
-    // Outdoor Night Rainy Backdrop
+    // Outdoor night
     const sky = new THREE.Mesh(
       new THREE.PlaneGeometry(12, 8),
-      new THREE.MeshBasicMaterial({ color: 0x050c1a })
+      new THREE.MeshBasicMaterial({ color: 0x050b14 })
     );
     sky.rotation.y = Math.PI / 2;
     sky.position.set(-3.5, 0, 0);
     dtGroup.add(sky);
 
-    // Outside Streetlamp Post & Light
+    // Streetlamp
     const pole = new THREE.Mesh(
       new THREE.CylinderGeometry(0.08, 0.08, 4, 8),
       new THREE.MeshStandardMaterial({ color: 0x334155 })
     );
-    pole.position.set(-2.5, 0, 3.0);
+    pole.position.set(-2.5, 0, 3);
     dtGroup.add(pole);
-
     const bulb = new THREE.Mesh(
-      new THREE.SphereGeometry(0.2, 8, 8),
+      new THREE.SphereGeometry(0.22, 8, 8),
       new THREE.MeshBasicMaterial({ color: 0xfef08a })
     );
-    bulb.position.set(-2.5, 1.8, 3.0);
+    bulb.position.set(-2.5, 1.9, 3);
     dtGroup.add(bulb);
 
     this.scene.add(dtGroup);
+  }
 
-    // 10. CURSED BALL PIT POOL in PlayPlace (X: 22, Z: -18)
+  buildBallPit() {
     const ballPitGroup = new THREE.Group();
     ballPitGroup.position.set(22, 0, -18);
 
-    // Padded Wood Enclosure Border
-    const pitWallMat = new THREE.MeshStandardMaterial({ color: 0x2563eb, roughness: 0.4 });
-    const pitBorder = new THREE.Mesh(new THREE.BoxGeometry(8.0, 0.8, 8.0), pitWallMat);
-    pitBorder.position.y = 0.4;
+    const pitWallMat = new THREE.MeshStandardMaterial({ color: 0x2563eb, roughness: 0.45 });
+    const pitBorder = new THREE.Mesh(new THREE.BoxGeometry(8.4, 0.9, 8.4), pitWallMat);
+    pitBorder.position.y = 0.45;
     ballPitGroup.add(pitBorder);
-    this.createCollisionProxy(22, 0.4, -18, 8.0, 0.8, 8.0);
+    this.createCollisionProxy(22, 0.45, -18, 8.4, 0.9, 8.4);
 
-    // Colorful Plastic Ball Surface
-    const ballsMat = new THREE.MeshStandardMaterial({ color: 0xec4899, roughness: 0.2, metalness: 0.1 });
-    const balls = new THREE.Mesh(new THREE.BoxGeometry(7.6, 0.4, 7.6), ballsMat);
-    balls.position.y = 0.5;
+    const ballsMat = new THREE.MeshStandardMaterial({ color: 0xec4899, roughness: 0.25, metalness: 0.05 });
+    const balls = new THREE.Mesh(new THREE.BoxGeometry(7.9, 0.5, 7.9), ballsMat);
+    balls.position.y = 0.65;
     ballPitGroup.add(balls);
 
-    this.scene.add(ballPitGroup);
+    // Hidden eyes group (for event)
+    const eyesGroup = new THREE.Group();
+    eyesGroup.name = 'ballpit_eyes';
+    eyesGroup.visible = false;
+    eyesGroup.position.set(0, 0.7, 0);
+    const eyeMat = new THREE.MeshBasicMaterial({ color: 0xfde047 });
+    for (let i = 0; i < 5; i++) {
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.06, 6, 6), eyeMat);
+      eye.position.set((Math.random() - 0.5) * 5, 0.1, (Math.random() - 0.5) * 5);
+      eyesGroup.add(eye);
+    }
+    ballPitGroup.add(eyesGroup);
 
-    // 11. EMERGENCY DIESEL GENERATOR in South Cellar (X: 0, Z: 28)
+    this.scene.add(ballPitGroup);
+  }
+
+  buildGenerator() {
     const genGroup = new THREE.Group();
     genGroup.position.set(0, 0, 28);
 
-    const genBodyMat = new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.7, roughness: 0.4 });
-    const genBody = new THREE.Mesh(new THREE.BoxGeometry(3.0, 1.8, 2.0), genBodyMat);
-    genBody.position.y = 0.9;
+    const genBodyMat = new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.72, roughness: 0.42 });
+    const genBody = new THREE.Mesh(new THREE.BoxGeometry(3.2, 1.9, 2.2), genBodyMat);
+    genBody.position.y = 0.95;
     genGroup.add(genBody);
-    this.createCollisionProxy(0, 0.9, 28, 3.2, 1.8, 2.2);
+    this.createCollisionProxy(0, 0.95, 28, 3.4, 1.9, 2.4);
 
-    // Exhaust Chimney Tube
     const chimney = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.15, 0.15, 2.2, 8),
+      new THREE.CylinderGeometry(0.16, 0.16, 2.4, 8),
       new THREE.MeshStandardMaterial({ color: 0x0f172a, metalness: 0.9 })
     );
-    chimney.position.set(1.0, 2.4, 0);
+    chimney.position.set(1.0, 2.6, 0);
     genGroup.add(chimney);
 
-    genGroup.userData = {
-      type: 'generator',
-      fueled: false,
-      fuelCount: 0,
-      requiredFuel: 2
-    };
-    // All interactables live in PropFactory so PlayerController receives the
-    // same array used by every other pickup and quest object.
+    genGroup.userData = { type: 'generator', fueled: false, fuelCount: 0, requiredFuel: 2 };
     this.propFactory.interactables.push(genGroup);
     this.scene.add(genGroup);
+    this.generatorMesh = genGroup;
+  }
 
-    // 12. Vintage Horror Posters & Bloodied Menu Boards
+  buildExteriorCar() {
+    const carGroup = new THREE.Group();
+    carGroup.name = 'car';
+    carGroup.position.set(3, 0, -42);
+    carGroup.rotation.y = Math.PI * 0.92;
+
+    // Simple car body
+    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x2e3a38, roughness: 0.35, metalness: 0.25 });
+    const body = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.8, 4.2), bodyMat);
+    body.position.y = 0.7;
+    body.castShadow = true;
+    carGroup.add(body);
+
+    // Roof
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(1.85, 0.6, 2.2), bodyMat);
+    roof.position.set(0, 1.25, -0.2);
+    carGroup.add(roof);
+
+    // Windows (black)
+    const glassMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.05, metalness: 0.9 });
+    const windshield = new THREE.Mesh(new THREE.BoxGeometry(1.84, 0.52, 0.1), glassMat);
+    windshield.position.set(0, 1.2, 0.95);
+    windshield.rotation.x = 0.25;
+    carGroup.add(windshield);
+
+    const rear = new THREE.Mesh(new THREE.BoxGeometry(1.84, 0.45, 0.1), glassMat);
+    rear.position.set(0, 1.2, -1.35);
+    rear.rotation.x = -0.2;
+    carGroup.add(rear);
+
+    // Headlights (glow when near)
+    const hlGeo = new THREE.BoxGeometry(0.2, 0.16, 0.08);
+    const hlMat = new THREE.MeshBasicMaterial({ color: 0xfef9c3 });
+    const hlLeft = new THREE.Mesh(hlGeo, hlMat);
+    hlLeft.position.set(-0.7, 0.55, 2.12);
+    carGroup.add(hlLeft);
+    const hlRight = hlLeft.clone();
+    hlRight.position.set(0.7, 0.55, 2.12);
+    carGroup.add(hlRight);
+
+    // Interior steering wheel / seat blocked view could be added
+    // Interactable car
+    const carProxy = new THREE.Mesh(
+      new THREE.BoxGeometry(2.2, 1.4, 4.6),
+      new THREE.MeshBasicMaterial({ visible: false })
+    );
+    carProxy.position.y = 0.7;
+    carProxy.userData = { type: 'car' };
+    carGroup.add(carProxy);
+    this.propFactory.interactables.push(carProxy);
+
+    this.scene.add(carGroup);
+    this.carGroup = carGroup;
+
+    // Small flashlight battery near car as lure
+    const bat = this.propFactory.createBatteryPickup(-1, 0.2, -40);
+    // Fuel can near trunk
+    const fuelInTrunk = new THREE.Mesh(
+      new THREE.BoxGeometry(0.35, 0.45, 0.32),
+      new THREE.MeshStandardMaterial({ color: 0x991b1b, emissive: 0x440000, emissiveIntensity: 0.15 })
+    );
+    fuelInTrunk.position.set(3.5, 0.32, -43.5);
+    fuelInTrunk.userData = { type: 'fuel_can_pickup' };
+    this.scene.add(fuelInTrunk);
+    this.propFactory.interactables.push(fuelInTrunk);
+  }
+
+  buildOffice() {
+    // Desk
+    const deskGeo = new THREE.BoxGeometry(2.4, 0.75, 1.2);
+    const deskMat = new THREE.MeshStandardMaterial({ color: 0x4a3422, roughness: 0.7 });
+    const desk = new THREE.Mesh(deskGeo, deskMat);
+    desk.position.set(-22, 0.38, 10);
+    desk.castShadow = true;
+    this.scene.add(desk);
+    this.createCollisionProxy(-22, 0.38, 10, 2.4, 0.75, 1.2);
+
+    // Chair
+    const chair = new THREE.Mesh(
+      new THREE.BoxGeometry(0.6, 0.8, 0.6),
+      new THREE.MeshStandardMaterial({ color: 0x1e1e1e })
+    );
+    chair.position.set(-22, 0.4, 11.2);
+    this.scene.add(chair);
+
+    // Office plant dead
+    const plant = new THREE.Mesh(
+      new THREE.BoxGeometry(0.4, 0.9, 0.4),
+      new THREE.MeshStandardMaterial({ color: 0x2a3a1a })
+    );
+    plant.position.set(-24, 0.45, 7);
+    this.scene.add(plant);
+  }
+
+  buildRestrooms() {
+    // Simple toilet proxies
+    const toiletMat = new THREE.MeshStandardMaterial({ color: 0xe5e7eb, roughness: 0.2 });
+    const toilet1 = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.5, 0.7), toiletMat);
+    toilet1.position.set(-26, 0.25, -21);
+    this.scene.add(toilet1);
+    const toilet2 = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.5, 0.7), toiletMat);
+    toilet2.position.set(-26, 0.25, -19);
+    this.scene.add(toilet2);
+    // Sink
+    const sink = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.35, 0.6), new THREE.MeshStandardMaterial({ color: 0xdbeafe }));
+    sink.position.set(-29.3, 0.85, -20);
+    this.scene.add(sink);
+  }
+
+  buildStorageRoom() {
+    // Shelves in storage SW
+    const shelfMat = new THREE.MeshStandardMaterial({ color: 0x4a4a4a, metalness: 0.6, roughness: 0.45 });
+    for (let i = 0; i < 3; i++) {
+      const shelf = new THREE.Mesh(new THREE.BoxGeometry(3.0, 1.8, 0.5), shelfMat);
+      shelf.position.set(-22 - i * 0.1, 0.9, 23 + i * 1.2);
+      this.scene.add(shelf);
+      this.createCollisionProxy(-22, 0.9, 23 + i * 1.2, 3.0, 1.8, 0.6);
+    }
+
+    // Boxes
+    for (let j = 0; j < 6; j++) {
+      const box = new THREE.Mesh(
+        new THREE.BoxGeometry(0.5, 0.5, 0.5),
+        new THREE.MeshStandardMaterial({ color: 0x9a8c72 })
+      );
+      box.position.set(-21 + (j % 3) * 0.6, 0.25 + Math.floor(j / 3) * 0.55, 23.5 + Math.random());
+      this.scene.add(box);
+    }
+  }
+
+  buildPostersAndPortraits() {
     const loader = new THREE.TextureLoader();
+
     loader.load('/assets/poster1.jpg', (tex) => {
-      const pMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.3 });
-      const pGeo = new THREE.PlaneGeometry(2.6, 2.6);
-
-      // Poster in Dining Hall North Wall
-      const poster1 = new THREE.Mesh(pGeo, pMat);
-      poster1.position.set(-8, 2.2, -29.7);
-      this.scene.add(poster1);
-
-      // Poster in PlayPlace East Wall
-      const poster2 = new THREE.Mesh(pGeo, pMat);
-      poster2.rotation.y = -Math.PI / 2;
-      poster2.position.set(29.7, 2.2, -18);
-      this.scene.add(poster2);
+      const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.35 });
+      const geo = new THREE.PlaneGeometry(2.6, 2.6);
+      const p1 = new THREE.Mesh(geo, mat);
+      p1.position.set(-8, 2.2, -29.7);
+      this.scene.add(p1);
+      const p2 = new THREE.Mesh(geo, mat);
+      p2.rotation.y = -Math.PI / 2;
+      p2.position.set(29.7, 2.2, -18);
+      this.scene.add(p2);
     });
 
     loader.load('/assets/menu_horror.jpg', (tex) => {
-      const mMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.2 });
-      const mGeo = new THREE.PlaneGeometry(2.4, 2.4);
-
-      // Bloody Menu in South Cellar Entrance
-      const menu1 = new THREE.Mesh(mGeo, mMat);
-      menu1.position.set(0, 2.3, 21.7);
-      this.scene.add(menu1);
-
-      // Bloody Menu in Manager's Office Wall
-      const menu2 = new THREE.Mesh(mGeo, mMat);
-      menu2.rotation.y = Math.PI / 2;
-      menu2.position.set(-29.7, 2.2, 11);
-      this.scene.add(menu2);
+      const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.25 });
+      const geo = new THREE.PlaneGeometry(2.4, 2.4);
+      const m1 = new THREE.Mesh(geo, mat);
+      m1.position.set(0, 2.3, 21.7);
+      this.scene.add(m1);
+      const m2 = new THREE.Mesh(geo, mat);
+      m2.rotation.y = Math.PI / 2;
+      m2.position.set(-29.7, 2.2, 11);
+      this.scene.add(m2);
     });
 
-    // Cursed Colonel Antique Gold Frame Portrait in Main Dining Hall Center
     loader.load('/assets/cursed_portrait.jpg', (tex) => {
-      const portraitMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.25 });
-      const portraitGeo = new THREE.PlaneGeometry(3.0, 3.0);
-      const portrait = new THREE.Mesh(portraitGeo, portraitMat);
-      portrait.position.set(0, 2.4, -29.7);
+      const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.28 });
+      const geo = new THREE.PlaneGeometry(3.0, 3.0);
+      const portrait = new THREE.Mesh(geo, mat);
+      portrait.position.set(0, 2.5, -29.7);
+      portrait.name = 'cursed_portrait_plane';
       this.scene.add(portrait);
+
+      // Changed version (eyes darker, smile wider) - same texture but tinted red for now, will be swapped by event
+      const changedMat = new THREE.MeshStandardMaterial({ map: tex, color: 0xffaaaa, roughness: 0.28 });
+      const changed = new THREE.Mesh(geo, changedMat);
+      changed.position.copy(portrait.position);
+      changed.position.z += 0.01;
+      changed.name = 'cursed_portrait_changed';
+      changed.visible = false;
+      this.scene.add(changed);
     });
 
-    // Visceral Meat Grinder Horror Mural in South Cellar
     loader.load('/assets/meat_grinder.jpg', (tex) => {
-      const grinderMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.4 });
-      const grinderGeo = new THREE.PlaneGeometry(5.0, 3.2);
-      const grinder = new THREE.Mesh(grinderGeo, grinderMat);
+      const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.4 });
+      const geo = new THREE.PlaneGeometry(5.0, 3.2);
+      const grinder = new THREE.Mesh(geo, mat);
       grinder.position.set(0, 2.1, 34.7);
       this.scene.add(grinder);
     });
 
-    // Surveillance CCTV Glitch Monitor TV in Manager's Office
+    // Additional blood poster at generator secret
+    loader.load('/assets/colonel_stalker.jpg', (tex) => {
+      const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.4, transparent: true, opacity: 0.9 });
+      const geo = new THREE.PlaneGeometry(2.2, 2.2);
+      const poster = new THREE.Mesh(geo, mat);
+      poster.position.set(3, 1.8, 26.9);
+      poster.rotation.y = Math.PI;
+      poster.name = 'colonel_poster_generator';
+      this.scene.add(poster);
+    });
+  }
+
+  buildCCTVWall() {
+    const loader = new THREE.TextureLoader();
     loader.load('/assets/cctv_glitch.jpg', (tex) => {
       const tvGroup = new THREE.Group();
-      tvGroup.position.set(-29.6, 1.8, 8.0);
+      tvGroup.position.set(-29.6, 1.85, 8.0);
       tvGroup.rotation.y = Math.PI / 2;
 
       const tvHousing = new THREE.Mesh(
-        new THREE.BoxGeometry(2.4, 1.8, 0.4),
+        new THREE.BoxGeometry(2.6, 2.0, 0.45),
         new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.6 })
       );
       tvGroup.add(tvHousing);
 
       const screenMat = new THREE.MeshBasicMaterial({ map: tex });
-      const screen = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 1.6), screenMat);
-      screen.position.set(0, 0, 0.21);
+      const screen = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 1.8), screenMat);
+      screen.position.set(0, 0, 0.24);
       tvGroup.add(screen);
+
+      // Interactable CCTV monitor - second screen
+      const secondMonitor = new THREE.Group();
+      secondMonitor.position.set(0, -1.2, 0);
+      const housing2 = new THREE.Mesh(
+        new THREE.BoxGeometry(1.8, 1.2, 0.35),
+        new THREE.MeshStandardMaterial({ color: 0x1e293b })
+      );
+      secondMonitor.add(housing2);
+      const screen2 = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 1.0), new THREE.MeshBasicMaterial({ map: tex, color: 0x88ff88 }));
+      screen2.position.set(0, 0, 0.18);
+      secondMonitor.add(screen2);
+      secondMonitor.userData = { type: 'cctv_monitor', camId: 'cam1' };
+      this.propFactory.interactables.push(secondMonitor);
+      tvGroup.add(secondMonitor);
 
       this.scene.add(tvGroup);
     });
+  }
+
+  buildEnvironmentalStorytelling() {
+    // Blood trail from kitchen to generator
+    const bloodTrail = new THREE.Group();
+    bloodTrail.name = 'blood_trail';
+    bloodTrail.visible = false;
+    const bloodMat = new THREE.MeshStandardMaterial({ color: 0x7f1d1d, roughness: 0.35, transparent: true, opacity: 0.88 });
+    for (let i = 0; i < 12; i++) {
+      const spot = new THREE.Mesh(new THREE.CircleGeometry(0.18 + Math.random() * 0.22, 8), bloodMat);
+      spot.rotation.x = -Math.PI / 2;
+      spot.position.set(
+        THREE.MathUtils.lerp(0, 0, i / 11) + (Math.random() - 0.5) * 0.6,
+        0.03,
+        THREE.MathUtils.lerp(10, 28, i / 11) + (Math.random() - 0.5) * 0.8
+      );
+      bloodTrail.add(spot);
+    }
+    this.scene.add(bloodTrail);
+
+    // Papers scattered in dining
+    const paperMat = new THREE.MeshStandardMaterial({ color: 0xefe5c5 });
+    for (let i = 0; i < 18; i++) {
+      const paper = new THREE.Mesh(new THREE.PlaneGeometry(0.35, 0.45), paperMat);
+      paper.rotation.x = -Math.PI / 2;
+      paper.rotation.z = Math.random() * Math.PI;
+      paper.position.set(
+        (Math.random() - 0.5) * 18,
+        0.02,
+        -22 + Math.random() * 18
+      );
+      this.scene.add(paper);
+    }
+
+    // Footprints (bloody, leading out)
+    const printMat = new THREE.MeshBasicMaterial({ color: 0x991b1b, transparent: true, opacity: 0.55 });
+    for (let i = 0; i < 8; i++) {
+      const print = new THREE.Mesh(new THREE.CircleGeometry(0.12, 6), printMat);
+      print.rotation.x = -Math.PI / 2;
+      print.position.set(-1.5 + Math.sin(i) * 0.6, 0.025, 23 + i * 0.9);
+      this.scene.add(print);
+    }
+  }
+
+  buildHidingSpots() {
+    // Under service counter
+    const hideSpot1 = new THREE.Mesh(
+      new THREE.BoxGeometry(2.0, 0.9, 1.0),
+      new THREE.MeshBasicMaterial({ visible: false })
+    );
+    hideSpot1.position.set(-2.8, 0.45, -5.2);
+    hideSpot1.userData = { type: 'hiding_spot', name: 'counter_hide' };
+    this.scene.add(hideSpot1);
+    this.propFactory.interactables.push(hideSpot1);
+
+    // Inside freezer between shelves
+    const hideSpot2 = new THREE.Mesh(
+      new THREE.BoxGeometry(1.2, 1.6, 1.2),
+      new THREE.MeshBasicMaterial({ visible: false })
+    );
+    hideSpot2.position.set(22, 0.8, 15);
+    hideSpot2.userData = { type: 'hiding_spot', name: 'freezer_hide' };
+    this.scene.add(hideSpot2);
+    this.propFactory.interactables.push(hideSpot2);
+
+    // Office closet
+    const hideSpot3 = new THREE.Mesh(
+      new THREE.BoxGeometry(1.0, 1.8, 1.0),
+      new THREE.MeshBasicMaterial({ visible: false })
+    );
+    hideSpot3.position.set(-26, 0.9, 19);
+    hideSpot3.userData = { type: 'hiding_spot', name: 'closet_hide' };
+    this.scene.add(hideSpot3);
+    this.propFactory.interactables.push(hideSpot3);
+  }
+
+  buildDecalsAndDirt() {
+    // Dirt overlay via dark planes slightly above floor in corners already implied by floor texture?
+    // Add some broken ceiling tiles
+    const tileMat = new THREE.MeshStandardMaterial({ color: 0x2f2a26, roughness: 1 });
+    for (let i = 0; i < 6; i++) {
+      const tile = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.06, 0.55), tileMat);
+      tile.position.set(
+        (Math.random() - 0.5) * 20,
+        0.03,
+        (Math.random() - 0.5) * 40
+      );
+      tile.rotation.y = Math.random() * Math.PI;
+      this.scene.add(tile);
+    }
   }
 }
