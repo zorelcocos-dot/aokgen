@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Night Shift at Kentucky Fried Carnage - Retro 3D FPS</title>
+  <link rel="stylesheet" href="/src/styles/game.css">
+</head>
+<body>
+  <!-- 3D WebGL Canvas Container -->
+  <div id="canvas-container"></div>
+
+  <!-- CRT & VHS Scanline Overlay -->
+  <div class="vhs-overlay" id="vhs-filter"></div>
+
+  <!-- Red Blood Damage Vignette -->
+  <div id="damage-vignette"></div>
+
+  <!-- Horror Jumpscare Glitch Flash on Damage -->
+  <div id="damage-glitch-face"></div>
+
+  <!-- Retro VHS Horror HUD -->
+  <div id="hud-container">
+    <div class="hud-top">
+      <div class="vhs-time">
+        <span class="rec-dot"></span>REC ● <span id="clock-display">03:14:02 AM</span>
+      </div>
+      <div class="task-box">
+        <div class="task-title" id="task-title">PHASE 1: CLOCK-IN & SANITIZATION</div>
+        <div class="task-desc" id="task-description">
+          • Punch in at the <b>Timecard Machine [E]</b> near registers
+        </div>
+      </div>
+    </div>
+
+    <!-- Center Reticle & Interaction UI -->
+    <div class="crosshair"></div>
+    <div id="interact-prompt">[E] Interact</div>
+    <div id="quest-banner">EQUIPPED: INDUSTRIAL MOP</div>
+    <div id="loot-notification"></div>
+
+    <div class="hud-bottom">
+      <!-- Vitals Bars: Health & Stamina & Battery -->
+      <div class="vitals-group">
+        <!-- Health Bar -->
+        <div class="meter-container">
+          <div class="meter-label" style="color: #ef4444;">HEALTH <span id="health-num">100%</span></div>
+          <div class="health-bar-bg">
+            <div id="health-bar-fill"></div>
+          </div>
+        </div>
+
+        <!-- Stamina Meter -->
+        <div class="meter-container">
+          <div class="meter-label">STAMINA [SHIFT]</div>
+          <div class="stamina-bar-bg">
+            <div id="stamina-bar-fill"></div>
+          </div>
+        </div>
+
+        <!-- Flashlight Battery -->
+        <div class="meter-container">
+          <div class="meter-label" style="color: #eab308;">BATTERY [F] <span id="battery-num">100%</span></div>
+          <div class="battery-bar-bg">
+            <div id="battery-bar-fill"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Inventory Hotbar (4 Slots) -->
+      <div class="hotbar">
+        <div class="hotbar-slot active" id="slot-flashlight">
+          <div>🔦 LIGHT</div>
+          <div class="slot-key">[1] / [F]</div>
+        </div>
+        <div class="hotbar-slot" id="slot-mop">
+          <div>🧹 MOP</div>
+          <div class="slot-key">[2]</div>
+        </div>
+        <div class="hotbar-slot" id="slot-spatula">
+          <div>🔪 CLEAVER</div>
+          <div class="slot-key">[3]</div>
+        </div>
+        <div class="hotbar-slot" id="slot-oil">
+          <div>🛢️ HOT OIL</div>
+          <div class="slot-key">[4]</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Start / Pause Click Blocker -->
+  <div id="blocker">
+    <h1 class="title-main">KENTUCKY FRIED CARNAGE</h1>
+    <div class="title-sub">THE GRAVEYARD SHIFT</div>
+
+    <div class="instructions-card">
+      <p><b>[WASD / ARROWS]</b> Walk &nbsp;|&nbsp; <b>[SHIFT]</b> Sprint &nbsp;|&nbsp; <b>[C]</b> Crouch</p>
+      <p><b>[MOUSE]</b> Look Around &nbsp;|&nbsp; <b>[LEFT CLICK]</b> Attack / Use Item</p>
+      <p><b>[RIGHT CLICK]</b> Focus Flashlight Stun Beam</p>
+      <p><b>[E]</b> Interact / Pick Up &nbsp;|&nbsp; <b>[F]</b> Toggle Flashlight</p>
+      <p><b>[1, 2, 3, 4 / SCROLL]</b> Switch Weapons & Tools</p>
+      <p style="margin-top: 10px; color: #fca5a5;">⚠️ <i>Defeat or evade the mutant chicken chimera, skittering hatchlings, and the Colonel. Escape through the drive-thru window!</i></p>
+    </div>
+
+    <button id="start-btn" class="btn-action start-btn">⚡ CLOCK IN & START SHIFT ⚡</button>
+    <div class="click-to-start" style="font-size: 20px; margin-top: 14px; color: #86efac;">CLICK ANYWHERE OR PRESS ANY KEY TO PLAY</div>
+  </div>
+
+  <!-- Jumpscare / Game Over Screen -->
+  <div id="jumpscare-overlay">
+    <div class="scare-title">TERMINATED BY MANAGEMENT</div>
+    <div class="scare-sub">YOU BECAME THE 11TH SECRET HERB & SPICE</div>
+    <button class="btn-action" onclick="location.reload()">RESTART SHIFT</button>
+  </div>
+
+  <!-- Shift Survived / Win Screen -->
+  <div id="win-screen">
+    <div class="win-title">SHIFT SURVIVED!</div>
+    <div class="scare-sub" style="color:#86efac;">You escaped the horror KFC alive with all your limbs intact.</div>
+    <button class="btn-action" onclick="location.reload()">CLOCK IN AGAIN</button>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

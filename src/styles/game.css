@@ -1,0 +1,537 @@
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=VT323&display=swap');
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  user-select: none;
+}
+
+body, html {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: #050203;
+  font-family: 'Share Tech Mono', monospace;
+  color: #fef08a;
+}
+
+#canvas-container {
+  width: 100%;
+  height: 100%;
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+/* CRT & VHS Filter Overlay */
+.vhs-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 15;
+  background: linear-gradient(
+    rgba(18, 16, 16, 0) 50%, 
+    rgba(0, 0, 0, 0.1) 50%
+  ), linear-gradient(
+    90deg,
+    rgba(255, 0, 0, 0.03),
+    rgba(0, 255, 0, 0.01),
+    rgba(0, 0, 255, 0.03)
+  );
+  background-size: 100% 4px, 6px 100%;
+  box-shadow: inset 0 0 80px rgba(0, 0, 0, 0.52);
+}
+
+.vhs-overlay::before {
+  content: " ";
+  display: block;
+  position: absolute;
+  top: 0; left: 0; bottom: 0; right: 0;
+  background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.12) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.03), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.03));
+  z-index: 15;
+  background-size: 100% 3px, 6px 100%;
+  pointer-events: none;
+  opacity: 0.2;
+}
+
+/* HUD Layer */
+#hud-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 25;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 24px;
+}
+
+/* Top Bar: VHS Timestamp & Shift Status */
+.hud-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.vhs-time {
+  font-family: 'VT323', monospace;
+  font-size: 28px;
+  color: #ef4444;
+  text-shadow: 0 0 8px #ef4444;
+  letter-spacing: 2px;
+}
+
+.rec-dot {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  background-color: #ef4444;
+  border-radius: 50%;
+  margin-right: 6px;
+  animation: blink 1s infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+/* Shift Objective Box */
+.task-box {
+  background: rgba(20, 5, 5, 0.85);
+  border: 2px solid #ef4444;
+  border-left: 6px solid #ef4444;
+  padding: 14px 20px;
+  border-radius: 4px;
+  max-width: 420px;
+  box-shadow: 0 0 16px rgba(239, 68, 68, 0.4);
+}
+
+.task-title {
+  font-size: 14px;
+  font-weight: bold;
+  color: #f87171;
+  letter-spacing: 1.5px;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+}
+
+.task-desc {
+  font-size: 16px;
+  color: #fef08a;
+  line-height: 1.4;
+}
+
+/* Center Reticle */
+.crosshair {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  background-color: rgba(254, 240, 138, 0.8);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  box-shadow: 0 0 6px #fef08a;
+}
+
+/* Interaction Prompt */
+#interact-prompt {
+  position: absolute;
+  top: 58%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(15, 5, 5, 0.9);
+  border: 1px solid #fef08a;
+  color: #fef08a;
+  padding: 8px 18px;
+  font-size: 16px;
+  border-radius: 4px;
+  display: none;
+  text-shadow: 0 0 6px #fef08a;
+}
+
+/* Banner Notification */
+#quest-banner {
+  position: absolute;
+  top: 25%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(185, 28, 28, 0.9);
+  color: #ffffff;
+  font-size: 20px;
+  font-weight: bold;
+  letter-spacing: 2px;
+  padding: 12px 28px;
+  border-radius: 6px;
+  border: 2px solid #fca5a5;
+  box-shadow: 0 0 25px rgba(239, 68, 68, 0.8);
+  display: none;
+}
+
+@keyframes bannerFade {
+  0% { opacity: 0; transform: translate(-50%, -20px); }
+  15% { opacity: 1; transform: translate(-50%, 0); }
+  80% { opacity: 1; transform: translate(-50%, 0); }
+  100% { opacity: 0; transform: translate(-50%, -20px); display: none; }
+}
+
+/* Bottom Bar: Stamina & Inventory */
+.hud-bottom {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+}
+
+/* Vitals Group: Health + Stamina + Battery */
+.vitals-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.meter-container {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.meter-label {
+  font-size: 11px;
+  color: #a1a1aa;
+  letter-spacing: 1px;
+  font-weight: bold;
+}
+
+.health-bar-bg {
+  width: 180px;
+  height: 12px;
+  background: #270707;
+  border: 1px solid #7f1d1d;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+#health-bar-fill {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, #dc2626, #ef4444);
+  box-shadow: 0 0 8px #ef4444;
+  transition: width 0.15s ease-out;
+}
+
+.stamina-bar-bg {
+  width: 180px;
+  height: 10px;
+  background: #18181b;
+  border: 1px solid #3f3f46;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+#stamina-bar-fill {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, #ef4444, #eab308, #22c55e);
+  transition: width 0.1s linear;
+}
+
+.battery-bar-bg {
+  width: 180px;
+  height: 10px;
+  background: #1c1808;
+  border: 1px solid #713f12;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+#battery-bar-fill {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, #ca8a04, #eab308);
+  box-shadow: 0 0 6px #eab308;
+  transition: width 0.2s linear;
+}
+
+/* Damage Vignette */
+#damage-vignette {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 22;
+  box-shadow: inset 0 0 100px rgba(220, 38, 38, 0);
+  transition: box-shadow 0.1s ease-out;
+}
+
+#damage-vignette.damaged {
+  box-shadow: inset 0 0 180px rgba(220, 38, 38, 0.95), inset 0 0 60px rgba(255, 0, 0, 1);
+  animation: hitShake 0.25s infinite;
+}
+
+@keyframes hitShake {
+  0% { transform: translate(0, 0); }
+  25% { transform: translate(-6px, 4px); }
+  50% { transform: translate(6px, -4px); }
+  75% { transform: translate(-4px, -6px); }
+  100% { transform: translate(0, 0); }
+}
+
+/* Horror Jumpscare Glitch Flash on Damage */
+#damage-glitch-face {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 26;
+  background: radial-gradient(circle, rgba(239, 68, 68, 0.5) 0%, rgba(10, 0, 0, 0.9) 100%);
+  display: none;
+  mix-blend-mode: hard-light;
+  animation: glitchShake 0.1s infinite;
+}
+
+#damage-glitch-face.flash {
+  display: block;
+}
+
+@keyframes glitchShake {
+  0% { transform: translate(0, 0) scale(1); filter: invert(0.8) hue-rotate(90deg); }
+  25% { transform: translate(-10px, 8px) scale(1.06); filter: contrast(300%) brightness(1.6); }
+  50% { transform: translate(10px, -8px) scale(0.96); filter: invert(1) hue-rotate(180deg); }
+  75% { transform: translate(-6px, -6px) scale(1.03); filter: saturate(500%); }
+  100% { transform: translate(0, 0) scale(1); filter: none; }
+}
+
+/* Loot Notification */
+#loot-notification {
+  position: absolute;
+  top: 75%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(10, 20, 10, 0.9);
+  color: #86efac;
+  border: 1px solid #22c55e;
+  padding: 8px 20px;
+  font-size: 15px;
+  letter-spacing: 1.5px;
+  border-radius: 4px;
+  box-shadow: 0 0 15px rgba(34, 197, 94, 0.4);
+  display: none;
+  pointer-events: none;
+  z-index: 30;
+}
+
+/* Inventory Slots */
+.hotbar {
+  display: flex;
+  gap: 10px;
+  background: rgba(24, 10, 10, 0.85);
+  padding: 8px 12px;
+  border: 1px solid #521818;
+  border-radius: 6px;
+}
+
+.hotbar-slot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 60px;
+  height: 60px;
+  background: #1c0d0d;
+  border: 2px solid #451a1a;
+  border-radius: 4px;
+  color: #71717a;
+  font-size: 11px;
+  transition: all 0.2s ease;
+}
+
+.hotbar-slot.active {
+  border-color: #ef4444;
+  color: #fef08a;
+  background: #3b1111;
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.6);
+  transform: scale(1.06);
+}
+
+.slot-key {
+  font-size: 10px;
+  color: #a1a1aa;
+  margin-top: 2px;
+}
+
+/* Start / Pause Blocker Screen */
+#blocker {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(10, 2, 2, 0.95);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  z-index: 9999;
+  cursor: pointer;
+  text-align: center;
+  pointer-events: auto;
+}
+
+.start-btn {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 24px;
+  background: #dc2626;
+  color: #ffffff;
+  border: 2px solid #fca5a5;
+  padding: 16px 36px;
+  border-radius: 6px;
+  cursor: pointer;
+  box-shadow: 0 0 25px rgba(220, 38, 38, 0.8);
+  letter-spacing: 2px;
+  transition: all 0.2s ease;
+  pointer-events: auto;
+}
+
+.start-btn:hover {
+  background: #ef4444;
+  transform: scale(1.08);
+  box-shadow: 0 0 40px rgba(239, 68, 68, 1);
+}
+
+.title-main {
+  font-family: 'VT323', monospace;
+  font-size: 64px;
+  color: #ef4444;
+  text-shadow: 0 0 20px #ef4444, 0 0 40px #991b1b;
+  margin-bottom: 8px;
+  letter-spacing: 4px;
+}
+
+.title-sub {
+  font-size: 20px;
+  color: #fef08a;
+  margin-bottom: 30px;
+  letter-spacing: 2px;
+}
+
+.instructions-card {
+  background: rgba(30, 10, 10, 0.8);
+  border: 1px solid #7f1d1d;
+  padding: 20px 30px;
+  border-radius: 8px;
+  max-width: 480px;
+  line-height: 1.8;
+  font-size: 15px;
+  margin-bottom: 30px;
+  color: #e5e7eb;
+}
+
+.instructions-card b {
+  color: #ef4444;
+}
+
+.click-to-start {
+  font-family: 'VT323', monospace;
+  font-size: 32px;
+  color: #22c55e;
+  animation: pulse 1.2s infinite;
+  letter-spacing: 2px;
+}
+
+@keyframes pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.05); opacity: 0.7; }
+}
+
+/* Jumpscare / Game Over Screen */
+#jumpscare-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: #7f1d1d;
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  z-index: 60;
+  animation: screenShake 0.1s infinite;
+}
+
+@keyframes screenShake {
+  0% { transform: translate(0, 0); }
+  25% { transform: translate(-6px, 6px); }
+  50% { transform: translate(6px, -6px); }
+  75% { transform: translate(-6px, -6px); }
+  100% { transform: translate(0, 0); }
+}
+
+.scare-title {
+  font-family: 'VT323', monospace;
+  font-size: 80px;
+  color: #ffffff;
+  text-shadow: 0 0 30px #000000;
+  margin-bottom: 12px;
+}
+
+.scare-sub {
+  font-size: 22px;
+  color: #fef08a;
+  margin-bottom: 30px;
+}
+
+/* Win Screen */
+#win-screen {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(6, 20, 10, 0.95);
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  z-index: 60;
+}
+
+.win-title {
+  font-family: 'VT323', monospace;
+  font-size: 72px;
+  color: #22c55e;
+  text-shadow: 0 0 25px #22c55e;
+  margin-bottom: 12px;
+}
+
+.btn-action {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 18px;
+  background: #ef4444;
+  color: #ffffff;
+  border: none;
+  padding: 12px 28px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+  pointer-events: auto;
+}
+
+.btn-action:hover {
+  background: #dc2626;
+  transform: scale(1.05);
+  box-shadow: 0 0 15px rgba(239, 68, 68, 0.8);
+}
