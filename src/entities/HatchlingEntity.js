@@ -56,6 +56,7 @@ export class HatchlingEntity {
     this.state = 'PATROL';
     this.wanderAngle = Math.random() * Math.PI * 2;
     this.repickTimer = 0;
+    this.biteVariant = 0;
     this.hearing = 11;
     this.sightRange = 9.5;
 
@@ -269,7 +270,13 @@ export class HatchlingEntity {
 
         if (dist < 1.35 && this.attackCooldown <= 0 && this.hasClearPath(playerPos)) {
           this.attackCooldown = 1.25;
-          this.sprite.playTrack(4, 7, 15);
+          // The sheet carries two authored bite cycles (row 1 lunge, row 2
+          // "skindering" bite). Alternating them stops a swarm from moving as
+          // one synchronised organism. Row 2 only exists on the final 4x4 art;
+          // playTrack clamps safely while the 4x2 placeholder is loaded.
+          this.biteVariant = this.biteVariant === 1 ? 0 : 1;
+          const biteRow = this.biteVariant === 1 ? 8 : 4;
+          this.sprite.playTrack(biteRow, biteRow + 3, 15);
           this.biteResetTimer = 0.48;
           this.audio?.playMonsterBite();
           // The player owns i-frames, so a swarm still lands one hit per window.

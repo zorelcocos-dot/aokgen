@@ -272,6 +272,94 @@ ok(qm.gameWon===true,'victory fires at the escape step with the key');
 ok(story.endingType==='secret','full knowledge -> secret ending');
 qm.reset(); player.reset(); story.reset(); ds.reset();
 
+section('audio: no stuck loops or duplicate sources across transitions');
+{
+  const loopCount = () => {
+    let n=0;
+    for(const k of Object.keys(audio)){
+      const v=audio[k];
+      if(v && typeof v==='object' && v.loop===true && v.started && !v.stopped) n++;
+    }
+    return n;
+  };
+  audio.reset?.();
+  const baseLoops = loopCount();
+  // Hammer the zone system: every zone, twice, in both directions.
+  const zones=['outdoor','dining','kitchen','office','freezer','basement',
+               'storage','hallway','bathroom','janitor','playplace'];
+  for(const z of zones) audio.setAmbienceZone(z);
+  for(const z of [...zones].reverse()) audio.setAmbienceZone(z);
+  for(const z of zones) audio.setAmbienceZone(z);
+  ok(loopCount()<=baseLoops+3, `zone thrash does not stack loops (${baseLoops} -> ${loopCount()})`);
+  // Repeated identical zone requests must be idempotent.
+  const before=loopCount();
+  for(let i=0;i<20;i++) audio.setAmbienceZone('kitchen');
+  ok(loopCount()===before, 'requesting the same zone repeatedly is a no-op');
+  // Chase layer on/off cycling.
+  for(let i=0;i<15;i++){ audio.setChase(true,0.8); audio.setChase(false); }
+  audio.setChase(false);
+  ok(true, 'chase layer toggles without throwing');
+  // Terminal transitions must duck everything, not leave ambience running.
+  audio.setAmbienceZone('kitchen'); audio.setChase(true,1);
+  audio.playDeathTransition();
+  ok(audio.chaseActive!==true, 'death stops the chase layer');
+  audio.reset?.();
+  audio.setAmbienceZone('kitchen'); audio.setChase(true,1);
+  audio.playVictoryTransition();
+  ok(audio.chaseActive!==true, 'victory stops the chase layer');
+  audio.reset?.();
+  ok(loopCount()<=baseLoops+3, 'reset returns the mixer to a clean baseline');
+}
+
+section('objective marker: never stale, never points at nothing');
+{
+  qm.reset(); player.reset(); story.reset(); ds.reset();
+  const tick = () => { qm.refreshObjectiveTarget(); qm.updateObjectiveMarker(0.016); };
+  tick();
+  ok(qm.objectiveMarker.visible===false, 'no marker during the intro');
+  qm.hasExitedCar=true; qm.evaluateProgress(); tick();
+  ok(qm.objectiveMarker.visible===true, 'ARRIVAL points at the time clock');
+  ok(qm.objectiveTarget===qm.punchClockMesh, 'and it is the clock specifically');
+  qm.handleInteraction({type:'punch_clock'},null); tick();
+  ok(qm.objectiveTarget!==qm.punchClockMesh, 'clock stops being the target once punched');
+  // Every target the marker ever picks must be a live, rendered scene object.
+  let bad=[];
+  const walk=[STEP.RESTAURANT,STEP.OFFICE,STEP.FREEZER,STEP.MEAT,STEP.BLACKOUT,
+              STEP.GENERATOR,STEP.COLONEL,STEP.ESCAPE];
+  for(const st of walk){
+    qm.currentStep=st; tick();
+    const t=qm.objectiveTarget;
+    if(t && (t.parent===null || t.visible===false)) bad.push(st);
+    if(t && qm.objectiveMarker.visible!==true) bad.push('hidden:'+st);
+  }
+  ok(bad.length===0, `marker never resolves to an orphaned/invisible object (${bad.join(',')})`);
+  qm.currentStep=STEP.ENDING; tick();
+  ok(qm.objectiveMarker.visible===false, 'marker is gone at the ending');
+  qm.reset(); player.reset(); story.reset(); ds.reset();
+  ok(qm.objectiveMarker.visible===false, 'reset hides the marker');
+}
+
+section('hotbar mirrors the inventory (no permanently dimmed slots)');
+{
+  const slotLocked = (n) => document.getElementById(`slot-${n}`).classList.contains('locked');
+  player.reset();
+  // The ctor grants the spatula, so it must be usable from the first frame.
+  ok(!slotLocked('flashlight'), 'flashlight is always available');
+  ok(!slotLocked('spatula'), 'starting spatula is not shown as locked');
+  ok(slotLocked('mop'), 'mop starts locked');
+  ok(slotLocked('oil'), 'oil starts locked');
+  player.inventory.addItem('mop');
+  ok(!slotLocked('mop'), 'picking up the mop unlocks its slot');
+  ok(player.availableSlots().includes('mop'), 'mop becomes selectable');
+  player.inventory.removeItem('mop');
+  ok(slotLocked('mop'), 'losing the mop re-locks the slot');
+  player.inventory.addItem('oil');
+  ok(!slotLocked('oil'), 'oil pitcher unlocks its slot');
+  player.reset();
+  ok(slotLocked('oil') && slotLocked('mop'), 'reset re-locks earned slots for run 2');
+  ok(!slotLocked('spatula'), 'reset restores the starting spatula');
+}
+
 section('procedural textures are cached, not regenerated');
 {
   const A = ProceduralTextureGen.createCheckeredFloorPBR(512);
