@@ -3,122 +3,188 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Night Shift at Kentucky Fried Carnage - Retro 3D FPS</title>
+  <title>AOKGEN - Route 17</title>
   <link rel="stylesheet" href="/src/styles/game.css">
 </head>
 <body>
-  <!-- 3D WebGL Canvas Container -->
+  <!-- 3D Canvas -->
   <div id="canvas-container"></div>
 
-  <!-- CRT & VHS Scanline Overlay -->
+  <!-- VHS / film grain overlay -->
   <div class="vhs-overlay" id="vhs-filter"></div>
 
-  <!-- Red Blood Damage Vignette -->
+  <!-- Atmosphere overlays -->
   <div id="damage-vignette"></div>
-
-  <!-- Horror Jumpscare Glitch Flash on Damage -->
   <div id="damage-glitch-face"></div>
+  <div id="breath-fog"></div>
+  <div id="hallway-silhouette"></div>
+  <div id="jumpscare-flash"></div>
+  <div id="cctv-anomaly"></div>
+  <div id="car-windshield-rain" class="car-rain"></div>
 
-  <!-- Retro VHS Horror HUD -->
+  <!-- Minimal Horror HUD -->
   <div id="hud-container">
     <div class="hud-top">
       <div class="vhs-time">
-        <span class="rec-dot"></span>REC ● <span id="clock-display">03:14:02 AM</span>
+        <span class="rec-dot"></span>REC <span id="clock-display">03:14:02 AM</span>
+        <span class="tape-label"> - ROUTE 17 / STORE #09</span>
       </div>
-      <div class="task-box">
-        <div class="task-title" id="task-title">PHASE 1: CLOCK-IN & SANITIZATION</div>
-        <div class="task-desc" id="task-description">
-          • Punch in at the <b>Timecard Machine [E]</b> near registers
-        </div>
+      <div class="task-box" id="task-box">
+        <div class="task-title" id="task-title">STRANDED</div>
+        <div class="task-desc" id="task-description">Your car died on Route 17. Storm closing in. Find shelter.</div>
+        <div class="task-hint" id="task-hint"></div>
       </div>
     </div>
 
-    <!-- Center Reticle & Interaction UI -->
-    <div class="crosshair"></div>
-    <div id="interact-prompt">[E] Interact</div>
-    <div id="quest-banner">EQUIPPED: INDUSTRIAL MOP</div>
+    <div class="crosshair">
+      <div class="ch-dot"></div>
+    </div>
+
+    <div id="interact-prompt" class="interact-prompt">
+      <span id="interact-key" class="i-key">E</span>
+      <span id="interact-title" class="i-title">Open</span>
+    </div>
+
+    <div id="quest-banner"></div>
     <div id="loot-notification"></div>
+    <div id="ambient-note" class="ambient-note"></div>
 
     <div class="hud-bottom">
-      <!-- Vitals Bars: Health & Stamina & Battery -->
       <div class="vitals-group">
-        <!-- Health Bar -->
-        <div class="meter-container">
-          <div class="meter-label" style="color: #ef4444;">HEALTH <span id="health-num">100%</span></div>
-          <div class="health-bar-bg">
-            <div id="health-bar-fill"></div>
-          </div>
+        <div class="meter" id="health-meter">
+          <div class="meter-label">VITAL <span id="health-num">100%</span></div>
+          <div class="health-bar-bg"><div id="health-bar-fill"></div></div>
         </div>
-
-        <!-- Stamina Meter -->
-        <div class="meter-container">
-          <div class="meter-label">STAMINA [SHIFT]</div>
-          <div class="stamina-bar-bg">
-            <div id="stamina-bar-fill"></div>
-          </div>
+        <div class="meter" id="stamina-meter">
+          <div class="meter-label">STAMINA</div>
+          <div class="stamina-bar-bg"><div id="stamina-bar-fill"></div></div>
         </div>
-
-        <!-- Flashlight Battery -->
-        <div class="meter-container">
-          <div class="meter-label" style="color: #eab308;">BATTERY [F] <span id="battery-num">100%</span></div>
-          <div class="battery-bar-bg">
-            <div id="battery-bar-fill"></div>
-          </div>
+        <div class="meter" id="battery-meter">
+          <div class="meter-label">LIGHT <span id="battery-num">100%</span></div>
+          <div class="battery-bar-bg"><div id="battery-bar-fill"></div></div>
         </div>
+        <div class="clue-counter" id="clue-counter">CLUES 0/11</div>
       </div>
 
-      <!-- Inventory Hotbar (4 Slots) -->
-      <div class="hotbar">
+      <div class="hotbar" id="hotbar">
         <div class="hotbar-slot active" id="slot-flashlight">
-          <div>🔦 LIGHT</div>
-          <div class="slot-key">[1] / [F]</div>
+          <div class="slot-icon">◐</div>
+          <div class="slot-name">LIGHT</div>
+          <div class="slot-key">1</div>
         </div>
-        <div class="hotbar-slot" id="slot-mop">
-          <div>🧹 MOP</div>
-          <div class="slot-key">[2]</div>
+        <div class="hotbar-slot" id="slot-mop" style="opacity:0.35">
+          <div class="slot-icon">†</div>
+          <div class="slot-name">MOP</div>
+          <div class="slot-key">2</div>
         </div>
         <div class="hotbar-slot" id="slot-spatula">
-          <div>🔪 CLEAVER</div>
-          <div class="slot-key">[3]</div>
+          <div class="slot-icon">✦</div>
+          <div class="slot-name">CLEAVER</div>
+          <div class="slot-key">3</div>
         </div>
-        <div class="hotbar-slot" id="slot-oil">
-          <div>🛢️ HOT OIL</div>
-          <div class="slot-key">[4]</div>
+        <div class="hotbar-slot" id="slot-oil" style="opacity:0.35">
+          <div class="slot-icon">◍</div>
+          <div class="slot-name">OIL</div>
+          <div class="slot-key">4</div>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- Start / Pause Click Blocker -->
-  <div id="blocker">
-    <h1 class="title-main">KENTUCKY FRIED CARNAGE</h1>
-    <div class="title-sub">THE GRAVEYARD SHIFT</div>
+  <!-- Document Reader Modal -->
+  <div id="document-modal" class="doc-modal">
+    <div class="doc-paper">
+      <div class="doc-header">
+        <span id="doc-type" class="doc-type">NOTE</span>
+        <span class="doc-close">[ESC TO CLOSE]</span>
+      </div>
+      <h2 id="doc-title" class="doc-title">Untitled</h2>
+      <pre id="doc-content" class="doc-content"></pre>
+    </div>
+  </div>
 
-    <div class="instructions-card">
-      <p><b>[WASD / ARROWS]</b> Walk &nbsp;|&nbsp; <b>[SHIFT]</b> Sprint &nbsp;|&nbsp; <b>[C]</b> Crouch</p>
-      <p><b>[MOUSE]</b> Look Around &nbsp;|&nbsp; <b>[LEFT CLICK]</b> Attack / Use Item</p>
-      <p><b>[RIGHT CLICK]</b> Focus Flashlight Stun Beam</p>
-      <p><b>[E]</b> Interact / Pick Up &nbsp;|&nbsp; <b>[F]</b> Toggle Flashlight</p>
-      <p><b>[1, 2, 3, 4 / SCROLL]</b> Switch Weapons & Tools</p>
-      <p style="margin-top: 10px; color: #fca5a5;">⚠️ <i>Defeat or evade the mutant chicken chimera, skittering hatchlings, and the Colonel. Escape through the drive-thru window!</i></p>
+  <!-- CCTV Monitor Modal -->
+  <div id="cctv-modal" class="cctv-modal">
+    <div class="cctv-frame">
+      <div class="cctv-header">
+        <span id="cctv-title" class="cctv-title">CAM 1 - DINING</span>
+        <span class="cctv-rec"><span class="rec-dot small"></span>REC</span>
+      </div>
+      <div class="cctv-screen">
+        <div class="cctv-static"></div>
+        <div class="cctv-feed-text" id="cctv-feed-text">Feed unstable...</div>
+      </div>
+      <div class="cctv-footer">[CLICK TO CLOSE]</div>
+    </div>
+  </div>
+
+  <!-- Main Menu / Blocker -->
+  <div id="blocker" class="blocker">
+    <div class="title-wrap">
+      <div class="title-glitch" data-text="AOKGEN">AOKGEN</div>
+      <div class="title-sub">ROUTE 17 - STORE #09</div>
+      <div class="title-tagline">The chicken knew your name.</div>
     </div>
 
-    <button id="start-btn" class="btn-action start-btn">⚡ CLOCK IN & START SHIFT ⚡</button>
-    <div class="click-to-start" style="font-size: 20px; margin-top: 14px; color: #86efac;">CLICK ANYWHERE OR PRESS ANY KEY TO PLAY</div>
+    <div class="lore-card">
+      <p>June, 1993. Driving Route 17 late after a sales call.</p>
+      <p>Engine coughs. Rain turns to static on the radio.</p>
+      <p>You see it - <b>AOKGEN</b> chicken, neon still buzzing, parking lot empty, fryer lights on.</p>
+      <p style="margin-top:10px;color:#f87171">Someone forgot to close.</p>
+      <p style="color:#a1a1aa;margin-top:8px;">No phone. No fuel. No help for 40 miles.</p>
+    </div>
+
+    <div class="controls-card">
+      <div class="ctrl-row"><span class="k">WASD</span> Move <span class="k">MOUSE</span> Look <span class="k">SHIFT</span> Sprint</div>
+      <div class="ctrl-row"><span class="k">C</span> Crouch <span class="k">F</span> Flashlight <span class="k">E</span> Interact / Read</div>
+      <div class="ctrl-row"><span class="k">Click</span> Use Tool <span class="k">Right Click</span> Focus Beam</div>
+      <div class="ctrl-row"><span class="k">H</span> Hide (near spots) <span class="k">ESC</span> Close docs</div>
+    </div>
+
+    <div class="menu-actions">
+      <button id="start-btn" class="btn-main">TURN OFF ENGINE & ENTER</button>
+      <div class="menu-option-row">
+        <label class="opt-label">SENSITIVITY <input id="sens-slider" type="range" min="0.0008" max="0.006" step="0.0002" value="0.0025"></label>
+        <label class="opt-label"><input id="vhs-toggle" type="checkbox" checked> VHS FILTER</label>
+      </div>
+      <div class="click-hint">CLICK OR PRESS ANY KEY</div>
+    </div>
+
+    <div class="version-tag">Build ver. 11.11.11 - "The 11th Spice"</div>
   </div>
 
-  <!-- Jumpscare / Game Over Screen -->
-  <div id="jumpscare-overlay">
-    <div class="scare-title">TERMINATED BY MANAGEMENT</div>
-    <div class="scare-sub">YOU BECAME THE 11TH SECRET HERB & SPICE</div>
-    <button class="btn-action" onclick="location.reload()">RESTART SHIFT</button>
+  <!-- Death Screen -->
+  <div id="jumpscare-overlay" class="overlay-screen death">
+    <div class="scare-title">MISSING</div>
+    <div class="scare-sub">STORE #09 INCIDENT REPORT - EMPLOYEE FAILED TO CLOCK OUT</div>
+    <div class="scare-lore" id="death-lore">You became part of the floor wax.</div>
+    <button class="btn-action" onclick="location.reload()">RESTART DRIVE</button>
   </div>
 
-  <!-- Shift Survived / Win Screen -->
-  <div id="win-screen">
-    <div class="win-title">SHIFT SURVIVED!</div>
-    <div class="scare-sub" style="color:#86efac;">You escaped the horror KFC alive with all your limbs intact.</div>
-    <button class="btn-action" onclick="location.reload()">CLOCK IN AGAIN</button>
+  <!-- Win Screen -->
+  <div id="win-screen" class="overlay-screen win">
+    <div class="win-title" id="ending-title">ESCAPED</div>
+    <div class="win-sub" id="ending-desc">You left Store #09 behind.<br>The neon sign finally dies in the rearview.</div>
+    <div id="secret-extra" class="secret-extra" style="display:none;">
+      <div class="secret-line">SECRET ENDING UNLOCKED - YOU READ EVERYTHING</div>
+      <div class="secret-lore">The white suit now fits you.</div>
+    </div>
+    <div class="win-stats">
+      <span id="win-clues">Clues 0/11</span> • <span id="win-time">Time: 03:14</span>
+    </div>
+    <button class="btn-action" onclick="location.reload()">DRIVE AGAIN</button>
+  </div>
+
+  <!-- Car Intro Overlay (inside car view) -->
+  <div id="car-intro" class="car-intro">
+    <div class="car-dashboard">
+      <div class="dash-light">FUEL: <span class="empty">EMPTY</span></div>
+      <div class="dash-radio">
+        <div class="radio-display" id="radio-text">-- kzzzh -- scanning ...</div>
+        <div class="radio-knob"></div>
+      </div>
+    </div>
+    <div class="car-steering"> </div>
   </div>
 
   <script type="module" src="/src/main.js"></script>
