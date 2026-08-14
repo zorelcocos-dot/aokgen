@@ -35,7 +35,6 @@ export class AudioManager {
       this.initialized = true;
       this.setupGains();
       this.startBaseAmbience();
-      console.log('[Audio] Initialized with organized categories');
     } catch (e) {
       console.warn('AudioContext failed', e);
     }

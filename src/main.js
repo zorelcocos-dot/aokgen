@@ -63,7 +63,6 @@ class Game {
   }
 
   initAssets() {
-    console.log('[Assets] Loading spritesheets and PBR...');
 
     const rawMonsterSheet = ProceduralTextureGen.generateChickenMonsterSheet();
     const rawColonelSheet = ProceduralTextureGen.generateColonelStalkerSheet();
@@ -280,7 +279,6 @@ class Game {
   }
 
   beginCarSequence() {
-    console.log('[Game] Begin car sequence - stranded on Route 17');
     this.introActive = true;
     this.carExited = false;
     this.timers.clearAll();
@@ -344,7 +342,6 @@ class Game {
     this.carExited = true;
     this.introActive = false;
     this.exitArmed = false;
-    console.log('[Game] Exited car - entering exterior');
 
     // Everything the intro scheduled dies here, including the radio.
     this.timers.clearAll();
@@ -385,7 +382,6 @@ class Game {
    * reused and run 2 starts instantly.
    */
   restart() {
-    console.log('[Game] Restart');
     this.timers.clearAll();
 
     // Hide every terminal / modal overlay.
