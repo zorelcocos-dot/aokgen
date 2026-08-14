@@ -67,14 +67,23 @@ export class ChromaKeyer {
    * @param {number} insetRatio - Inset margin (e.g. 0.04 to cut borders)
    * @returns {HTMLCanvasElement[]}
    */
-  static sliceFrames(keyedCanvas, cols, rows, insetRatio = 0.035) {
-    const rawFrameW = keyedCanvas.width / cols;
-    const rawFrameH = keyedCanvas.height / rows;
+  static sliceFrames(keyedCanvas, cols, rows, insetRatio = 0.035, sourceRect = null) {
+    // Some authored sheets carry a label gutter (row captions like "WALKING",
+    // "ATTACK") outside the frame grid. sourceRect lets the caller point the
+    // slicer at the grid itself; without it the gutter is treated as sprite
+    // area and every frame is sheared sideways.
+    const sx = sourceRect ? sourceRect.x : 0;
+    const sy = sourceRect ? sourceRect.y : 0;
+    const sw = sourceRect ? sourceRect.width : keyedCanvas.width;
+    const sh = sourceRect ? sourceRect.height : keyedCanvas.height;
+
+    const rawFrameW = sw / cols;
+    const rawFrameH = sh / rows;
 
     const insetX = Math.round(rawFrameW * insetRatio);
     const insetY = Math.round(rawFrameH * insetRatio);
-    const frameW = rawFrameW - insetX * 2;
-    const frameH = rawFrameH - insetY * 2;
+    const frameW = Math.max(1, Math.round(rawFrameW - insetX * 2));
+    const frameH = Math.max(1, Math.round(rawFrameH - insetY * 2));
 
     const frames = [];
 
@@ -88,7 +97,7 @@ export class ChromaKeyer {
         // Draw only the inner content (strips black grid and corner text)
         fCtx.drawImage(
           keyedCanvas,
-          c * rawFrameW + insetX, r * rawFrameH + insetY, frameW, frameH,
+          sx + c * rawFrameW + insetX, sy + r * rawFrameH + insetY, frameW, frameH,
           0, 0, frameW, frameH
         );
 
@@ -103,8 +112,8 @@ export class ChromaKeyer {
    * sheets contain dark guide lines and labels between frames; leaving those
    * pixels in the atlas makes them shimmer around billboard characters.
    */
-  static createTrimmedAtlas(keyedCanvas, cols, rows, insetRatio = 0.035) {
-    const frames = this.sliceFrames(keyedCanvas, cols, rows, insetRatio);
+  static createTrimmedAtlas(keyedCanvas, cols, rows, insetRatio = 0.035, sourceRect = null) {
+    const frames = this.sliceFrames(keyedCanvas, cols, rows, insetRatio, sourceRect);
     if (frames.length === 0) return keyedCanvas;
 
     const atlas = document.createElement('canvas');

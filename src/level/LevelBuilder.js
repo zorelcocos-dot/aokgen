@@ -211,8 +211,8 @@ export class LevelBuilder {
     // East wall X=30
     this.createWall(30, roomHeight / 2, 2.5, wallThickness, roomHeight, 70, this.materials.metal);
     // West wall with drive-thru window gap Z 4-6 and front entrance
-    this.createWall(-30, roomHeight / 2, -14, wallThickness, roomHeight, 32, this.materials.metal); // -30 to 2
-    this.createWall(-30, roomHeight / 2, 18, wallThickness, roomHeight, 34, this.materials.metal); // 6 to 35
+    this.createWall(-30, roomHeight / 2, -13, wallThickness, roomHeight, 34, this.materials.metal); // -30 to 4
+    this.createWall(-30, roomHeight / 2, 20.5, wallThickness, roomHeight, 29, this.materials.metal); // 6 to 35
     this.createWall(-30, 0.5, 5, wallThickness, 1.0, 2.4, this.materials.metal); // sill
     this.createWall(-30, 3.6, 5, wallThickness, 1.2, 2.4, this.materials.metal); // lintel
 
@@ -240,10 +240,12 @@ export class LevelBuilder {
     this.createWall(-15, roomHeight / 2, -26, wallThickness, roomHeight, 14, this.materials.tileWall);
     this.createWall(-15, 3.6, -18, wallThickness, 1.2, 2.2, this.materials.tileWall);
     // Inner restroom divider (separate janitor closet and toilets)
-    this.createWall(-22.5, roomHeight / 2, -24, 15, roomHeight, wallThickness, this.materials.tileWall);
-    // Creates janitor closet at -22.5, -28
-    // Door for janitor closet (handled later as door)
-    this.createWall(-22.5, roomHeight / 2, -30, 5, roomHeight, wallThickness, this.materials.tileWall); // northmost? already exterior but ensure
+    // ...leaving a 1.2m doorway at x -23.1..-21.9 that DoorSystem fills with
+    // 'janitor_closet'. Without this gap the closet (and its diesel can) was a
+    // sealed box.
+    this.createWall(-26.55, roomHeight / 2, -24, 6.9, roomHeight, wallThickness, this.materials.tileWall); // -30 to -23.1
+    this.createWall(-18.45, roomHeight / 2, -24, 6.9, roomHeight, wallThickness, this.materials.tileWall); // -21.9 to -15
+    this.createWall(-22.5, 3.6, -24, 1.2, 1.2, wallThickness, this.materials.tileWall); // lintel over the doorway
 
     // 4. Walk-in Freezer Vault east X 14 to 30, Z 0 to 22
     this.createWall(22, roomHeight / 2, 0, 16, roomHeight, wallThickness, this.materials.metal);
@@ -259,18 +261,25 @@ export class LevelBuilder {
 
     // 5. Manager Office west X -30 to -14, Z 0 to 22
     this.createWall(-22, roomHeight / 2, 0, 16, roomHeight, wallThickness, this.materials.officeWall);
-    this.createWall(-22, roomHeight / 2, 22, 16, roomHeight, wallThickness, this.materials.officeWall);
-    this.createWall(-14, roomHeight / 2, 5, wallThickness, roomHeight, 10, this.materials.metal);
-    this.createWall(-14, roomHeight / 2, 17, wallThickness, roomHeight, 10, this.materials.metal);
-    this.createWall(-14, 3.6, 11, wallThickness, 1.2, 2.0, this.materials.metal);
+    // (the office's south wall at z=22 is built with the storage doorway below)
+    // Doorway z 10.4..11.6 exactly matches the 'office_main' leaf; the old
+    // 2m gap left a 1m hole the player could walk through beside a locked door.
+    this.createWall(-14, roomHeight / 2, 5.2, wallThickness, roomHeight, 10.4, this.materials.metal); // 0 to 10.4
+    this.createWall(-14, roomHeight / 2, 16.8, wallThickness, roomHeight, 10.4, this.materials.metal); // 11.6 to 22
+    this.createWall(-14, 3.6, 11, wallThickness, 1.2, 1.2, this.materials.metal);
 
     // 6. South divider Kitchen vs Basement Z=22 X -14 to 14 with opening -2 to 2
-    this.createWall(-8, roomHeight / 2, 22, 12, roomHeight, wallThickness, this.materials.metal);
-    this.createWall(8, roomHeight / 2, 22, 12, roomHeight, wallThickness, this.materials.metal);
-    this.createWall(0, 3.6, 22, 4.0, 1.2, wallThickness, this.materials.metal);
+    // Doorway x -2..-0.8 filled by 'generator_door'.
+    this.createWall(-8, roomHeight / 2, 22, 12, roomHeight, wallThickness, this.materials.metal); // -14 to -2
+    this.createWall(6.6, roomHeight / 2, 22, 14.8, roomHeight, wallThickness, this.materials.metal); // -0.8 to 14
+    this.createWall(-1.4, 3.6, 22, 1.2, 1.2, wallThickness, this.materials.metal);
 
-    // 7. Storage room southwest divider? Create wall to separate storage from office corridor
-    this.createWall(-22, roomHeight / 2, 22, 0.3, 2.8, 0.3, this.materials.dirtyWall); // placeholder?
+    // 7. Storage room (x -30..-14, z 22..35) - its north wall carries the
+    // 'storage_door' doorway at x -18.6..-17.4. Previously this was a 0.3m
+    // decorative stub and the office-south wall sealed the room completely.
+    this.createWall(-24.3, roomHeight / 2, 22, 11.4, roomHeight, wallThickness, this.materials.dirtyWall); // -30 to -18.6
+    this.createWall(-15.7, roomHeight / 2, 22, 3.4, roomHeight, wallThickness, this.materials.dirtyWall); // -17.4 to -14
+    this.createWall(-18, 3.6, 22, 1.2, 1.2, wallThickness, this.materials.dirtyWall); // lintel
 
     // 8. Generator room enclosure southeast X -2 to 8, Z 24 to 35
     this.createWall(-2, roomHeight / 2, 26, wallThickness, roomHeight, 8, this.materials.metal);
@@ -285,15 +294,9 @@ export class LevelBuilder {
     // Wall to hide secret: at Z 34, from X -2 to 2 create false wall that looks like real but has hidden prompt
     this.createWall(0, roomHeight / 2, 33.8, 4.5, roomHeight, wallThickness, this.materials.dirtyWall);
 
-    // Heavy walk-in freezer vault door (animated, requires keycard)
-    const freezerDoorGeo = new THREE.BoxGeometry(0.22, 3.0, 2.2);
-    this.freezerDoorMesh = new THREE.Mesh(freezerDoorGeo, this.materials.freezerDoor);
-    this.freezerDoorMesh.position.set(14, 1.5, 11);
-    this.freezerDoorMesh.castShadow = true;
-    this.freezerDoorMesh.userData = { type: 'freezer_door', isLocked: true, isOpen: false };
-    this.propFactory.interactables.push(this.freezerDoorMesh);
-    this.colliders.push(this.freezerDoorMesh);
-    this.scene.add(this.freezerDoorMesh);
+    // The walk-in freezer vault door itself is owned by DoorSystem
+    // (QuestManager.initDoorSystem creates it at 14, 1.5, 11). Only the static
+    // hazard frame lives here.
 
     // Hazard stripes frame
     const fMat = new THREE.MeshBasicMaterial({ color: 0xeab308 });
@@ -417,13 +420,8 @@ export class LevelBuilder {
     );
     dtGroup.add(dtFrame);
 
-    this.dtWindow = new THREE.Mesh(
-      new THREE.BoxGeometry(0.08, 1.9, 1.9),
-      this.materials.glass
-    );
-    this.dtWindow.userData = { type: 'drive_thru_window', isOpen: false };
-    dtGroup.add(this.dtWindow);
-    this.propFactory.interactables.push(this.dtWindow);
+    // The sliding pane itself is a DoorSystem door ('drive_thru_window'),
+    // created in QuestManager.initDoorSystem at world (-30, 2, 5).
 
     // Glowing sign
     const sign = new THREE.Mesh(

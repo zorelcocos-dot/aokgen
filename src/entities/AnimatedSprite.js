@@ -27,6 +27,7 @@ export class AnimatedSprite {
     this.elapsedTime = 0;
     this.isPlaying = true;
     this.loop = true;
+    this.flashTimer = 0;
 
     // Clone texture so multiple instances can have independent UV offsets
     this.texture = config.texture.clone();
@@ -58,8 +59,14 @@ export class AnimatedSprite {
   }
 
   playTrack(start, end, fps = 6, loop = true) {
-    this.startFrame = start;
-    this.endFrame = end;
+    // Tracks are authored against the final art. While a placeholder sheet
+    // with fewer rows is loaded, clamp instead of walking off the atlas and
+    // sampling garbage UVs.
+    const last = this.cols * this.rows - 1;
+    this.startFrame = Math.min(Math.max(0, start), last);
+    this.endFrame = Math.min(Math.max(this.startFrame, end), last);
+    start = this.startFrame;
+    end = this.endFrame;
     this.fps = fps;
     this.loop = loop;
     if (this.currentFrame < start || this.currentFrame > end) {
@@ -67,6 +74,26 @@ export class AnimatedSprite {
       this.setFrame(start);
     }
     this.isPlaying = true;
+  }
+
+  /**
+   * Re-lays-out the UV grid when the underlying image is swapped for art with
+   * a different frame layout (e.g. a 4x2 placeholder replaced by 4x4 art).
+   * Tracks are stored as flat frame indices, so they are remapped by row.
+   */
+  setGrid(cols, rows) {
+    if (this.cols === cols && this.rows === rows) return;
+    const oldCols = this.cols;
+    const startRow = Math.floor(this.startFrame / oldCols);
+    const endRow = Math.floor(this.endFrame / oldCols);
+    this.cols = cols;
+    this.rows = rows;
+    // Clamp the active track into the new grid instead of letting it point at
+    // frames that no longer exist.
+    this.startFrame = Math.min(startRow, rows - 1) * cols;
+    this.endFrame = Math.min(Math.min(endRow, rows - 1) * cols + (cols - 1), cols * rows - 1);
+    this.texture.repeat.set(1 / cols, 1 / rows);
+    this.setFrame(this.startFrame);
   }
 
   setFrame(frameIndex) {
@@ -81,6 +108,13 @@ export class AnimatedSprite {
   }
 
   update(delta, camera) {
+    // Damage flash runs on the frame clock, so a restart or a dispose can
+    // never leave a sprite stuck red by a pending timer.
+    if (this.flashTimer > 0) {
+      this.flashTimer -= delta;
+      if (this.flashTimer <= 0) this.material.color.setHex(0xffffff);
+    }
+
     // Billboarding: Rotate to face camera
     if (camera && this.mesh) {
       if (this.lockY) {
@@ -117,8 +151,14 @@ export class AnimatedSprite {
 
   flashRed(duration = 0.2) {
     this.material.color.setHex(0xff2222);
-    setTimeout(() => {
-      if (this.material) this.material.color.setHex(0xffffff);
-    }, duration * 1000);
+    this.flashTimer = Math.max(this.flashTimer, duration);
+  }
+
+  /** Frees the cloned texture, geometry and material. */
+  dispose() {
+    this.mesh.parent?.remove(this.mesh);
+    this.mesh.geometry.dispose();
+    this.material.dispose();
+    this.texture.dispose();
   }
 }

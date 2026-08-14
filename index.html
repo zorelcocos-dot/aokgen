@@ -72,17 +72,17 @@
           <div class="slot-name">LIGHT</div>
           <div class="slot-key">1</div>
         </div>
-        <div class="hotbar-slot" id="slot-mop" style="opacity:0.35">
+        <div class="hotbar-slot locked" id="slot-mop">
           <div class="slot-icon">†</div>
           <div class="slot-name">MOP</div>
           <div class="slot-key">2</div>
         </div>
-        <div class="hotbar-slot" id="slot-spatula">
+        <div class="hotbar-slot locked" id="slot-spatula">
           <div class="slot-icon">✦</div>
           <div class="slot-name">CLEAVER</div>
           <div class="slot-key">3</div>
         </div>
-        <div class="hotbar-slot" id="slot-oil" style="opacity:0.35">
+        <div class="hotbar-slot locked" id="slot-oil">
           <div class="slot-icon">◍</div>
           <div class="slot-name">OIL</div>
           <div class="slot-key">4</div>
@@ -158,7 +158,7 @@
     <div class="scare-title">MISSING</div>
     <div class="scare-sub">STORE #09 INCIDENT REPORT - EMPLOYEE FAILED TO CLOCK OUT</div>
     <div class="scare-lore" id="death-lore">You became part of the floor wax.</div>
-    <button class="btn-action" onclick="location.reload()">RESTART DRIVE</button>
+    <button class="btn-action" id="restart-btn">RESTART DRIVE</button>
   </div>
 
   <!-- Win Screen -->
@@ -172,7 +172,7 @@
     <div class="win-stats">
       <span id="win-clues">Clues 0/11</span> • <span id="win-time">Time: 03:14</span>
     </div>
-    <button class="btn-action" onclick="location.reload()">DRIVE AGAIN</button>
+    <button class="btn-action" id="play-again-btn">DRIVE AGAIN</button>
   </div>
 
   <!-- Car Intro Overlay (inside car view) -->

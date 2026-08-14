@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import { TimerRegistry } from './Timers.js';
 
 /**
  * EventManager - Cinematic scripted horror events that build atmospheric tension
@@ -24,6 +24,8 @@ export class EventManager {
     this.flickerQueue = [];
     this.objectSwapQueue = [];
     this.whisperTimer = 0;
+    /** All deferred effect timers, so reset() can cancel them mid-flight. */
+    this.timers = new TimerRegistry();
 
     this.initEvents();
   }
@@ -45,7 +47,7 @@ export class EventManager {
       action: () => {
         this.triggerFlicker(0.8, 2);
         this.playSpatialSound('distant_chair', { volume: 0.4, delay: 0.5 });
-        setTimeout(() => this.showSubtleNotification("Chair moved when you weren't looking."), 1200);
+        this.timers.setTimeout(() => this.showSubtleNotification("Chair moved when you weren't looking."), 1200);
       }
     });
 
@@ -81,7 +83,7 @@ export class EventManager {
       action: () => {
         this.playSpatialSound('phone_ring');
         if (this.audio) this.audio.playCCTVGlitch();
-        setTimeout(() => {
+        this.timers.setTimeout(() => {
           this.playSpatialSound('phone_dead');
           this.showSubtleNotification("Line dead. Dial tone... then breathing.");
         }, 2500);
@@ -115,7 +117,10 @@ export class EventManager {
     this.registerEvent({
       id: 'portrait_change',
       oneTime: true,
-      condition: (ctx) => ctx.phase === 3 && ctx.seenPortrait > 2,
+      // Phase is a floor, not an equality: the player rarely walks back past
+      // the portrait on exactly one step, and an equality gate meant this beat
+      // could never fire.
+      condition: (ctx) => ctx.phase >= 2 && ctx.seenPortrait > 2,
       action: () => {
         this.triggerPortraitChange();
       }
@@ -124,7 +129,9 @@ export class EventManager {
     this.registerEvent({
       id: 'cctv_figure',
       oneTime: false,
-      condition: (ctx) => ctx.watchCCTV && Math.random() < 0.08,
+      // Rolled per frame while the feed is open: ~1 in 125 frames is roughly
+      // one sighting every two seconds of watching, then a long cooldown.
+      condition: (ctx) => ctx.watchCCTV && Math.random() < 0.008,
       cooldown: 30,
       action: () => {
         this.triggerCCTVFigure();
@@ -134,7 +141,10 @@ export class EventManager {
     this.registerEvent({
       id: 'generator_startle',
       oneTime: true,
-      condition: (ctx) => ctx.phase === 6 && ctx.justFueledGenerator,
+      // Fuelling the generator immediately advances the ladder past GENERATOR,
+      // so gating on phase === 6 made this unreachable. The one-shot signal is
+      // the trigger.
+      condition: (ctx) => ctx.justFueledGenerator,
       action: () => {
         this.cinematicGeneratorSurge();
       }
@@ -153,7 +163,7 @@ export class EventManager {
     this.registerEvent({
       id: 'blood_trail_appears',
       oneTime: true,
-      condition: (ctx) => ctx.phase === 4 && ctx.enteredGeneratorRoom,
+      condition: (ctx) => ctx.phase >= 4 && ctx.enteredGeneratorRoom,
       action: () => {
         this.revealBloodTrail();
       }
@@ -162,7 +172,7 @@ export class EventManager {
     this.registerEvent({
       id: 'radio_car_final',
       oneTime: true,
-      condition: (ctx) => ctx.phase === 8 && ctx.nearCar,
+      condition: (ctx) => ctx.phase >= 8 && ctx.nearCar,
       action: () => {
         this.playRadioDisturbance("HE'S IN THE BACK SEAT --kzzz--");
       }
@@ -250,8 +260,8 @@ export class EventManager {
     if (!el) return;
     el.textContent = text;
     el.className = `ambient-note visible type-${type}`;
-    clearTimeout(this._noteTimeout);
-    this._noteTimeout = setTimeout(() => el.className = 'ambient-note', duration);
+    this.timers.clearTimeout(this._noteTimeout);
+    this._noteTimeout = this.timers.setTimeout(() => el.className = 'ambient-note', duration);
   }
 
   triggerBallPitEyes() {
@@ -259,7 +269,7 @@ export class EventManager {
     const eyesGroup = this.scene.getObjectByName('ballpit_eyes');
     if (!eyesGroup) return;
     eyesGroup.visible = true;
-    setTimeout(() => { if (eyesGroup) eyesGroup.visible = false; }, 850);
+    this.timers.setTimeout(() => { eyesGroup.visible = false; }, 850);
     if (this.audio) this.audio.playWhisper(0.15);
   }
 
@@ -267,7 +277,7 @@ export class EventManager {
     const overlay = document.getElementById('breath-fog');
     if (!overlay) return;
     overlay.classList.add('active');
-    setTimeout(() => overlay.classList.remove('active'), 1200);
+    this.timers.setTimeout(() => overlay.classList.remove('active'), 1200);
   }
 
   triggerPortraitChange() {
@@ -287,7 +297,7 @@ export class EventManager {
     const el = document.getElementById('cctv-anomaly');
     if (!el) return;
     el.classList.add('active');
-    setTimeout(() => el.classList.remove('active'), 900);
+    this.timers.setTimeout(() => el.classList.remove('active'), 900);
     if (this.audio) this.audio.playCCTVGlitch();
   }
 
@@ -297,13 +307,13 @@ export class EventManager {
     }
     if (this.audio) {
       this.audio.playBreakerRestore(0.8);
-      setTimeout(() => this.audio.playMonsterScreech(0.3), 800);
+      this.timers.setTimeout(() => this.audio.playMonsterScreech(0.3), 800);
     }
     // Briefly show silhouette at end of hallway
     const sil = document.getElementById('hallway-silhouette');
     if (sil) {
       sil.classList.add('active');
-      setTimeout(() => sil.classList.remove('active'), 1100);
+      this.timers.setTimeout(() => sil.classList.remove('active'), 1100);
     }
     this.showSubtleNotification("Power restored. Something else woke up.", 4000, 'danger');
   }
@@ -320,7 +330,35 @@ export class EventManager {
     const overlay = document.getElementById('jumpscare-flash');
     if (overlay) {
       overlay.classList.add('active');
-      setTimeout(() => overlay.classList.remove('active'), 200 + intensity * 300);
+      this.timers.setTimeout(() => overlay.classList.remove('active'), 200 + intensity * 300);
     }
+  }
+
+  /**
+   * Cancels pending effects and clears every one-time latch so the same
+   * scripted beats can fire again on the next run.
+   */
+  reset() {
+    this.timers.clearAll();
+    this.triggeredEvents.clear();
+    this.activeAmbientEvents.length = 0;
+    this.flickerQueue.length = 0;
+    this.objectSwapQueue.length = 0;
+    this.lastEventTime = 0;
+    this.eventCooldown = 0;
+    this.whisperTimer = 0;
+    for (const evt of this.events.values()) evt.lastTrigger = -999;
+
+    // Put back the scene objects and overlays events can leave switched.
+    for (const [name, visible] of [['ballpit_eyes', false], ['blood_trail', false],
+                                   ['cursed_portrait_plane', true], ['cursed_portrait_changed', false]]) {
+      const obj = this.scene?.getObjectByName(name);
+      if (obj) obj.visible = visible;
+    }
+    for (const id of ['breath-fog', 'cctv-anomaly', 'hallway-silhouette', 'jumpscare-flash']) {
+      document.getElementById(id)?.classList.remove('active');
+    }
+    const note = document.getElementById('ambient-note');
+    if (note) note.className = 'ambient-note';
   }
 }

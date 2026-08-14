@@ -205,6 +205,12 @@ body, html { width:100%; height:100%; overflow:hidden; background:#050305; font-
   border:1.5px solid #3a1a1a; border-radius:3px; color:#6b7280; font-size:10px; transition:all 0.18s ease; position:relative;
 }
 .hotbar-slot.active{ border-color:#ef4444; color:#fef08a; background:#2f1616; box-shadow:0 0 10px rgba(239,68,68,0.45); transform:translateY(-1px); }
+/* Not yet earned. refreshHotbar() toggles this class from the inventory, so
+   the hotbar reflects what the player actually carries. The markup used to
+   carry an inline opacity here, which outranked the class and left slots
+   dimmed forever even after the item was picked up. */
+.hotbar-slot.locked{ opacity:0.3; filter:grayscale(1); }
+.hotbar-slot.locked .slot-key{ color:#3f3f46; }
 .slot-icon{ font-size:18px; line-height:1; }
 .slot-name{ font-size:9px; letter-spacing:0.8px; margin-top:2px; }
 .slot-key{ font-size:8px; color:#71717a; position:absolute; top:2px; right:4px; }

@@ -320,19 +320,35 @@ And below in fresh blood:
     return context.trim();
   }
 
-  getObjectiveText(currentGamePhase) {
-    // This provides lore-contextual objectives, not generic tasks
-    switch (currentGamePhase) {
-      case 0: return 'Find a way inside. The storm is getting worse.';
-      case 1: return 'Your car is dead. Find a phone or help.';
-      case 2: return 'The timecard says 03:14. What happened here?';
-      case 3: return 'The keycard is somewhere in the PlayPlace. A child hid it.';
-      case 4: return 'Something in Vault #4 is still warm.';
-      case 5: return 'The fryers overloaded the grid. Find the old generator.';
-      case 6: return 'Power restored. But you are not alone in the feed.';
-      case 7: return 'The man in white wants his key back.';
-      case 8: return 'Get to the car. Nothing else matters.';
+  /**
+   * Lore-flavoured objective line, keyed to the QuestManager STEP enum.
+   * This is only a fallback - the HUD writes its own per-step text - so it
+   * stays deliberately atmospheric rather than instructional.
+   */
+  getObjectiveText(step) {
+    switch (step) {
+      case 0:  return 'The engine is dead. The only lights for miles are ahead.';
+      case 1:  return 'Store #09. The doors are open at three in the morning.';
+      case 2:  return 'You clocked in. The timecard before yours says 03:14.';
+      case 3:  return 'The manager locked something away before he stopped coming in.';
+      case 4:  return 'A child hid the keycard. The freezer is what they hid it from.';
+      case 5:  return 'Vault #4 is still warm. The manifest was not lying.';
+      case 6:  return 'The fryers pulled the grid down. Something moved in the dark.';
+      case 7:  return 'The old generator is in the basement. It needs fuel.';
+      case 8:  return 'Power is back. So is he. The man in white wants his key.';
+      case 9:  return 'The drive-thru shutter is the only way out. Get to the car.';
+      case 10: return 'Drive. Do not look at the mirror.';
       default: return 'Survive.';
     }
+  }
+
+  /** Restores the narrative state for a fresh run. */
+  reset() {
+    this.currentBeat = STORY_BEATS.INTRO;
+    this.discoveredClues.clear();
+    this.readDocuments.clear();
+    this.cctvWatched.clear();
+    this.secretFound = false;
+    this.endingType = null;
   }
 }
