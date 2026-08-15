@@ -3,3 +3,9 @@ dist
 .vercel
 .gemini
 *.log
+
+# Raw painted texture sources. These are large intermediates; the pixel-art
+# outputs baked from them by tools/build_textures.py are committed instead
+# (public/assets/tex). Keep them out of the repo to avoid a ~27MB payload.
+tools/raw/
+__pycache__/

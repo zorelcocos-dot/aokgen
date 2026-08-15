@@ -34,12 +34,28 @@ export class LightingSystem {
   }
 
   initLights() {
-    // Very dark base ambient - forces flashlight use
-    this.ambientLight = new THREE.AmbientLight(0x0a0a12, 0.45);
+    // Base ambient. The old 0.45 of near-black (0x0a0a12) left every surface
+    // at roughly 2% grey, so the textures, the props and the level geometry
+    // were all invisible until a light happened to touch them - the game read
+    // as flat black shapes. This is still dark enough to need the flashlight,
+    // but the world is legible instead of absent.
+    // Ambient presets, so setPower() cannot silently re-hardcode a different
+    // (and much darker) value than the one initLights chose.
+    this.AMBIENT_POWERED = { color: 0x1c2030, intensity: 0.85 };
+    this.AMBIENT_BLACKOUT = { color: 0x2a0a0c, intensity: 0.42 };
+    this.ambientLight = new THREE.AmbientLight(
+      this.AMBIENT_POWERED.color, this.AMBIENT_POWERED.intensity
+    );
     this.scene.add(this.ambientLight);
 
-    // Subtle directional moonlight from north for exterior
-    this.moonLight = new THREE.DirectionalLight(0x6a7a9a, 0.4);
+    // Cool hemisphere fill so floors and ceilings are not lit identically.
+    // Cheap (no shadow pass) and it stops interiors looking like flat cutouts.
+    this.hemiLight = new THREE.HemisphereLight(0x4a5570, 0x0e0c10, 0.5);
+    this.hemiLight.position.set(0, 12, 0);
+    this.scene.add(this.hemiLight);
+
+    // Directional moonlight from the north for the exterior.
+    this.moonLight = new THREE.DirectionalLight(0x8fa4c8, 0.85);
     this.moonLight.position.set(-20, 28, -40);
     this.moonLight.castShadow = false;
     this.scene.add(this.moonLight);
@@ -265,8 +281,9 @@ export class LightingSystem {
         e.light.intensity = 1.8;
         if (e.mesh) e.mesh.material.color.setHex(0xff0000);
       });
-      this.ambientLight.color.setHex(0x220505);
-      this.ambientLight.intensity = 0.18;
+      this.ambientLight.color.setHex(this.AMBIENT_BLACKOUT.color);
+      this.ambientLight.intensity = this.AMBIENT_BLACKOUT.intensity;
+      if (this.hemiLight) this.hemiLight.intensity = 0.18;
       this.generatorBulb.intensity = 0.0;
       this.driveThruLight.intensity = 0.15;
       this.parkingLight.intensity = 0.08;
@@ -285,8 +302,9 @@ export class LightingSystem {
         e.light.intensity = 0;
         if (e.mesh) e.mesh.material.color.setHex(0x440000);
       });
-      this.ambientLight.color.setHex(0x0a0a12);
-      this.ambientLight.intensity = 0.45;
+      this.ambientLight.color.setHex(this.AMBIENT_POWERED.color);
+      this.ambientLight.intensity = this.AMBIENT_POWERED.intensity;
+      if (this.hemiLight) this.hemiLight.intensity = 0.5;
       this.generatorBulb.intensity = 1.2;
       this.driveThruLight.intensity = 2.6;
       this.parkingLight.intensity = 1.4;

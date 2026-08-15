@@ -113,6 +113,8 @@ export class PlayerController {
     // Input
     this.keys = {};
     this.isLocked = false;
+    /** True while the pause overlay is up; blocks all gameplay input. */
+    this.isPaused = false;
     this.isStarted = false;
     this.pointerLockRequested = false;
 
@@ -168,6 +170,8 @@ export class PlayerController {
     this.movementLocked = false;
     this.interactOverride = null;
     this._lastBatteryPct = -1;
+    // A restart from the death screen must never leave the pause overlay up.
+    this.setPaused(false);
     this.clearHighlight();
 
     // Inventory back to the starting loadout.
@@ -192,6 +196,29 @@ export class PlayerController {
     this.updateHealthHUD();
     this.updateBatteryHUD();
     this.syncColliders();
+  }
+
+  /**
+   * Shows / hides the pause overlay and freezes input with it.
+   *
+   * `isPaused` was already checked in three input handlers but nothing ever
+   * set it, so it was dead code. It is now the single flag that means "the
+   * player is not in control", and update() honours it too.
+   */
+  setPaused(paused) {
+    if (this.isPaused === paused) return;
+    this.isPaused = paused;
+    const menu = document.getElementById('pause-menu');
+    if (menu) menu.classList.toggle('visible', paused);
+    if (paused) {
+      this.isLocked = false;
+      // Never leave a movement key stuck down across a pause.
+      for (const k of Object.keys(this.keys)) this.keys[k] = false;
+      this.isSprinting = false;
+      this.isMoving = false;
+    } else {
+      this.isLocked = true;
+    }
   }
 
   /** Re-acquires pointer lock. Public so a restart can grab it back. */
@@ -238,21 +265,57 @@ export class PlayerController {
       blocker.onclick = (e) => { e.stopPropagation(); startGame(); };
     }
 
+    // Pause menu: clicking anywhere on it (or the button) resumes.
+    const pauseMenu = document.getElementById('pause-menu');
+    const resumeBtn = document.getElementById('resume-btn');
+    const resume = (e) => {
+      e?.stopPropagation();
+      e?.preventDefault();
+      this.setPaused(false);
+      requestPointerLock();
+    };
+    if (resumeBtn) resumeBtn.onclick = resume;
+    if (pauseMenu) pauseMenu.onclick = resume;
+
+    // The pause screen carries its own sensitivity slider so the setting can
+    // be corrected mid-run instead of only from the title screen.
+    const pauseSens = document.getElementById('pause-sens');
+    if (pauseSens) {
+      pauseSens.value = localStorage.getItem('sensitivity') || '0.0025';
+      pauseSens.addEventListener('input', (e) => {
+        e.stopPropagation();
+        localStorage.setItem('sensitivity', e.target.value);
+        const menuSlider = document.getElementById('sens-slider');
+        if (menuSlider) menuSlider.value = e.target.value;
+      });
+      // Dragging the slider must not count as "click to resume".
+      pauseSens.addEventListener('click', (e) => e.stopPropagation());
+      pauseSens.addEventListener('pointerdown', (e) => e.stopPropagation());
+    }
+
     this._on(window, 'click', (e) => {
       if (!this.isStarted) startGame();
       else if (e.target === this.domElement && !document.pointerLockElement) requestPointerLock();
     });
 
+    // Losing pointer lock is a real event, not something to paper over. The
+    // old handler kept `isLocked = true` after the lock was gone, so the game
+    // carried on simulating while mouse-look silently did nothing - the
+    // player was left walking blind with no indication anything had changed.
+    // Now it surfaces as an explicit pause the player can see and dismiss.
     this._on(document, 'pointerlockchange', () => {
       const hasLock = document.pointerLockElement === this.domElement;
       if (hasLock) {
         this.isLocked = true;
         this.pointerLockRequested = false;
+        this.setPaused(false);
       } else if (this.isStarted) {
-        // Only keep isLocked true if we are still in game (allow mouse to menu)
         this.pointerLockRequested = false;
-        // Keep movement enabled even without pointer lock for accessibility
-        this.isLocked = true;
+        // A modal (document / CCTV) legitimately releases the lock; that is
+        // its own UI and must not also raise the pause screen.
+        const modalOpen = this.questManager?._docOpen === true;
+        const ended = this.isDead || this.questManager?.gameOver || this.questManager?.gameWon;
+        if (!modalOpen && !ended) this.setPaused(true);
       }
     });
 
@@ -277,7 +340,12 @@ export class PlayerController {
     // Keyboard - single keydown listener owns start, movement flags and actions.
     this._on(window, 'keydown', (e) => {
       if (!this.isStarted) { startGame(); return; }
-      if (this.isDead || this.isPaused) return;
+      // While paused, the only key that does anything is the one that resumes.
+      if (this.isPaused) {
+        if (e.code === 'Escape' || e.code === 'Enter' || e.code === 'Space') resume(e);
+        return;
+      }
+      if (this.isDead) return;
       this.keys[e.code] = true;
 
       // Flashlight
@@ -861,14 +929,33 @@ export class PlayerController {
     this._bounds = next;
   }
 
-  /** Forces one object's cached box to be recomputed on next query. */
+  /**
+   * Forces one object's cached collision box to be rebuilt right now.
+   *
+   * This used to only set `frame = -1`, which is the "recompute me" flag read
+   * by the per-frame refresh - but that refresh is gated on
+   * `userData.dynamicCollider`. Anything that moved without carrying that flag
+   * (the secret wall panel, a prop nudged by a script) kept its stale box
+   * forever, so it stayed solid in the place it used to be. Recomputing here
+   * makes the call mean what its name says regardless of the flag.
+   */
   refreshCollider(object) {
     const entry = this._bounds.get(object);
-    if (entry) entry.frame = -1;
+    if (!entry) return;
+    entry.frame = -1;
+    object.updateWorldMatrix(true, false);
+    entry.box.setFromObject(object);
   }
 
   collidesAt(x, z) {
-    const radius = this.isCrouching ? 0.42 : 0.5;
+    // Collision "radius" is the half-width of an axis-aligned square around
+    // the player, so the body is 2*radius across. At the old 0.5 that made a
+    // 1.0m-wide player, which is wider than a real doorway: the level's 1.2m
+    // doorways left a 0.2m slot the player had to thread perfectly, and any
+    // approach that was not dead-centre simply stopped against thin air.
+    // 0.3 gives a 0.6m body - human-sized, and enough clearance that doorways
+    // and the gaps between props are actually walkable.
+    const radius = this.isCrouching ? 0.26 : 0.3;
     this.collisionPoint.set(x, this.position.y, z);
     const bottom = this.position.y - (this.isCrouching ? this.crouchHeight : this.playerHeight);
     const top = this.position.y;

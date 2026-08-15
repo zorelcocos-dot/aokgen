@@ -4,7 +4,9 @@
  */
 export class Viewmodel {
   constructor(options) {
-    this.frames = options.frameCanvases;
+    // May be empty until the baked hands atlas finishes loading; render()
+    // already no-ops on a missing frame, so there is nothing to wait for.
+    this.frames = options.frameCanvases || [];
     this.audio = options.audio;
     this.activeItem = 'flashlight';
     this.isSwinging = false;

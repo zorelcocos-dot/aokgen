@@ -133,9 +133,11 @@ body, html { width:100%; height:100%; overflow:hidden; background:#050305; font-
 .crosshair::before{ width:14px; height:1px; }
 .crosshair::after{ height:14px; width:1px; }
 
-/* Interaction prompt - elegant minimal */
+/* Interaction prompt - elegant minimal.
+   Pushed from 56% to 60%: at 56% on a short viewport the prompt box clipped
+   the crosshair, so the reticle sat inside the label. */
 .interact-prompt{
-  position:absolute; top:56%; left:50%; transform:translate(-50%,-50%);
+  position:absolute; top:60%; left:50%; transform:translate(-50%,-50%);
   background:rgba(10,10,14,0.82); border:1px solid rgba(254,240,138,0.22);
   color:#fef9c3; padding:7px 14px; font-size:13px; letter-spacing:0.8px;
   border-radius:2px; display:none; align-items:center; gap:8px;
@@ -158,33 +160,50 @@ body, html { width:100%; height:100%; overflow:hidden; background:#050305; font-
   84%{opacity:1; transform:translate(-50%,0)}100%{opacity:0; transform:translate(-50%,-14px)}
 }
 
+/* Loot pickups and ambient story lines used to be pinned to 71% and 68% of
+   the viewport height and both centred, so a pickup during an ambient line
+   drew the two boxes on top of each other. They now live in a single
+   bottom-centre column that stacks instead of overlapping. */
+#message-stack{
+  position:absolute; left:50%; bottom:132px; transform:translateX(-50%);
+  display:flex; flex-direction:column-reverse; align-items:center; gap:8px;
+  pointer-events:none; z-index:30; width:min(560px, 76vw);
+}
+
 #loot-notification{
-  position:absolute; top:71%; left:50%; transform:translateX(-50%);
   background:rgba(8,18,10,0.92); color:#86efac; border:1px solid rgba(34,197,94,0.35);
   padding:7px 18px; font-size:12px; letter-spacing:1.2px; border-radius:3px;
-  box-shadow:0 0 14px rgba(34,197,94,0.22); display:none; z-index:30;
+  box-shadow:0 0 14px rgba(34,197,94,0.22); display:none; text-align:center;
 }
-@keyframes notifPop{0%{transform:translateX(-50%) scale(0.92)}100%{transform:translateX(-50%) scale(1)}}
+@keyframes notifPop{0%{transform:scale(0.92); opacity:0.4}100%{transform:scale(1); opacity:1}}
 
 .ambient-note{
-  position:absolute; left:50%; top:68%; transform:translateX(-50%);
-  color:#cbd5e1; background:rgba(0,0,0,0.55); border-left:2px solid #64748b;
+  color:#cbd5e1; background:rgba(0,0,0,0.72); border-left:2px solid #64748b;
   padding:6px 14px; font-size:12px; font-style:italic; letter-spacing:0.6px;
-  opacity:0; transition:opacity 0.5s, transform 0.5s; max-width:520px; text-align:center;
-  pointer-events:none;
+  opacity:0; transition:opacity 0.45s ease; text-align:center;
+  pointer-events:none; max-width:100%;
 }
-.ambient-note.visible{ opacity:1; transform:translateX(-50%) translateY(-6px); }
+.ambient-note.visible{ opacity:1; }
 .ambient-note.type-danger{ border-left-color:#ef4444; color:#fecaca; }
 .ambient-note.type-radio{ border-left-color:#eab308; color:#fef08a; font-family:'VT323', monospace; font-size:15px; }
 
 /* Bottom HUD */
 .hud-bottom{ display:flex; justify-content:space-between; align-items:flex-end; gap:20px; }
 
-.vitals-group{ display:flex; flex-direction:column; gap:7px; min-width:190px; }
+/* The vitals block sits on its own panel so the bars stay readable against a
+   bright floor instead of dissolving into it. */
+.vitals-group{
+  display:flex; flex-direction:column; gap:7px; min-width:190px;
+  background:rgba(8,6,8,0.55); border:1px solid rgba(82,24,24,0.3);
+  border-radius:4px; padding:9px 11px; backdrop-filter: blur(2px);
+}
 .meter{ display:flex; flex-direction:column; gap:3px; }
-.meter-label{ font-size:10px; color:#a1a1aa; letter-spacing:1px; font-weight:bold; }
+.meter-label{
+  font-size:10px; color:#a1a1aa; letter-spacing:1px; font-weight:bold;
+  display:flex; justify-content:space-between; gap:8px;
+}
 .health-bar-bg, .stamina-bar-bg, .battery-bar-bg{
-  width:184px; height:7px; background:rgba(0,0,0,0.7);
+  width:184px; height:7px; background:rgba(0,0,0,0.8);
   border:1px solid rgba(127,29,29,0.35); border-radius:2px; overflow:hidden; position:relative;
 }
 .stamina-bar-bg{ border-color:rgba(63,63,70,0.45); }
@@ -322,6 +341,36 @@ body, html { width:100%; height:100%; overflow:hidden; background:#050305; font-
 .click-hint{ font-family:'VT323', monospace; font-size:14px; color:#22c55e; letter-spacing:1.5px; animation:pulse 1.2s infinite; margin-top:4px; }
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.55}}
 .version-tag{ position:absolute; bottom:10px; right:12px; font-size:9px; color:#3f3f46; letter-spacing:1px; }
+
+/* Pause menu */
+.pause-menu{
+  position:absolute; inset:0; z-index:90; display:none;
+  align-items:center; justify-content:center; cursor:pointer;
+  background:radial-gradient(ellipse at center, rgba(10,4,6,0.82) 0%, rgba(3,1,4,0.94) 70%);
+  backdrop-filter: blur(5px);
+}
+.pause-menu.visible{ display:flex; }
+.pause-card{
+  background:rgba(14,8,10,0.9); border:1px solid #3f1717; border-radius:4px;
+  padding:26px 32px; text-align:center; display:flex; flex-direction:column;
+  align-items:center; gap:14px; box-shadow:0 0 40px rgba(0,0,0,0.9);
+  max-width:min(560px,92vw);
+}
+.pause-title{
+  font-family:'VT323', monospace; font-size:56px; color:#ef4444; letter-spacing:5px;
+  text-shadow:0 0 18px #ef4444; line-height:0.95;
+}
+.pause-sub{ font-size:11px; color:#a1a1aa; letter-spacing:2.4px; margin-top:-6px; }
+.pause-controls{
+  background:rgba(14,14,16,0.7); border:1px solid #27272a; border-radius:4px;
+  padding:12px 18px; font-size:11px; color:#a1a1aa;
+  display:flex; flex-direction:column; gap:6px; width:100%;
+}
+.pause-opt{ font-size:11px; color:#a1a1aa; }
+.pause-hint{
+  font-family:'VT323', monospace; font-size:14px; color:#22c55e;
+  letter-spacing:1.5px; animation:pulse 1.2s infinite;
+}
 
 /* Overlay screens */
 .overlay-screen{
