@@ -483,6 +483,106 @@ export class LevelBuilder {
   }
 
   /**
+   * The lit "AOKGEN" sign over the entrance, and the entrance canopy.
+   *
+   * The letters are drawn to a canvas rather than modelled, so the sign is one
+   * extra draw call. It is emissive/unlit so it stays readable from across the
+   * dark parking lot, which is the point: it is the landmark the intro sends
+   * the player towards, and the marker they navigate back to at the end.
+   */
+  buildNeonSign(roomHeight) {
+    const cv = document.createElement('canvas');
+    cv.width = 1024;
+    cv.height = 256;
+    const ctx = cv.getContext('2d');
+
+    ctx.fillStyle = '#0d0508';
+    ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.strokeStyle = '#2a1013';
+    ctx.lineWidth = 10;
+    ctx.strokeRect(5, 5, cv.width - 10, cv.height - 10);
+
+    ctx.font = 'bold 150px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    // Dead tube: the second N never lights. Cheap, and it tells the player
+    // the place has been failing for a while.
+    const text = 'AOKGEN';
+    const cx = cv.width / 2;
+    const cy = cv.height / 2 - 8;
+    ctx.shadowColor = '#ff2036';
+    ctx.shadowBlur = 42;
+    ctx.fillStyle = '#ff4d5e';
+    ctx.fillText(text, cx, cy);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#ffd7dc';
+    ctx.font = 'bold 148px monospace';
+    ctx.fillText(text, cx, cy);
+
+    // The failing final letter, painted back over in dead grey.
+    const w = ctx.measureText(text).width;
+    const lastW = ctx.measureText('N').width;
+    ctx.fillStyle = '#0d0508';
+    ctx.fillRect(cx + w / 2 - lastW, cy - 82, lastW + 6, 164);
+    ctx.fillStyle = '#3b2226';
+    ctx.fillText('N', cx + w / 2 - lastW / 2, cy);
+
+    ctx.font = '30px monospace';
+    ctx.fillStyle = '#e3c98a';
+    ctx.fillText('FRIED CHICKEN  ·  OPEN 24 HOURS', cx, cv.height - 34);
+
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.magFilter = THREE.NearestFilter;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.anisotropy = this.tex?.maxAnisotropy ?? 1;
+
+    const sign = new THREE.Mesh(
+      new THREE.PlaneGeometry(11, 2.75),
+      new THREE.MeshBasicMaterial({ map: tex, toneMapped: false })
+    );
+    sign.position.set(0, roomHeight + 0.55, -30.6);
+    sign.name = 'aokgen_sign';
+    this.scene.add(sign);
+
+    // Backing box so the sign is not a floating decal when seen at an angle.
+    const box = new THREE.Mesh(
+      new THREE.BoxGeometry(11.6, 3.15, 0.42),
+      this.surface('metal', 11.6, 3.15)
+    );
+    box.position.set(0, roomHeight + 0.55, -30.42);
+    this.scene.add(box);
+
+    // Entrance canopy, so the doorway reads as a doorway from the lot.
+    const canopy = new THREE.Mesh(
+      new THREE.BoxGeometry(7.2, 0.28, 2.2),
+      this.surface('metal', 7.2, 2.2)
+    );
+    canopy.position.set(0, 3.35, -31.6);
+    canopy.name = 'entrance_canopy';
+    this.scene.add(canopy);
+
+    for (const px of [-3.2, 3.2]) {
+      const post = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.09, 0.09, 3.2, 8),
+        this.materials.trunk
+      );
+      post.position.set(px, 1.6, -32.5);
+      this.scene.add(post);
+    }
+
+    // Two working lamps under the canopy - the only welcoming light outside.
+    for (const px of [-2.0, 2.0]) {
+      const lamp = new THREE.Mesh(
+        new THREE.BoxGeometry(0.5, 0.08, 0.5),
+        new THREE.MeshBasicMaterial({ color: 0xffe9b0, toneMapped: false })
+      );
+      lamp.position.set(px, 3.18, -31.6);
+      this.scene.add(lamp);
+    }
+  }
+
+  /**
    * The hidden grinder room behind the generator bay.
    *
    * Layout (world coords):
@@ -563,6 +663,14 @@ export class LevelBuilder {
     skin(-30.35, roomHeight / 2, -13, t, roomHeight, 34);
     skin(-30.35, roomHeight / 2, 20.5, t, roomHeight, 29);
     skin(0, roomHeight / 2, 35.35, 60, roomHeight, t);
+
+    // The AOKGEN sign.
+    //
+    // LightingSystem has always put a red neon PointLight at (0, 4.2, -30.5),
+    // but nothing ever built a sign for it to come from - so the facade was a
+    // blank wall with an unexplained red glow on it, and the building the
+    // whole intro tells you to walk towards had no identity at all.
+    this.buildNeonSign(roomHeight);
 
     // Parapet + roof cap.
     const roof = new THREE.Mesh(
@@ -795,59 +903,131 @@ export class LevelBuilder {
     this.generatorMesh = genGroup;
   }
 
+  /**
+   * The player's broken-down car.
+   *
+   * This is the very first thing the game shows - the intro is played sitting
+   * in it, and it is the escape objective at the end - and it was five
+   * floating boxes with no wheels, no bumpers and no shadow contact, hovering
+   * over the asphalt. Rebuilt as a recognisable 1980s sedan: tapered bonnet
+   * and boot, wheels with arches, bumpers, grille, mirrors, lit tail lights
+   * and an interior visible through the glass.
+   *
+   * Local axes: +Z is the front of the car, +X is its right flank.
+   */
   buildExteriorCar() {
     const carGroup = new THREE.Group();
     carGroup.name = 'car';
     carGroup.position.set(3, 0, -42);
     carGroup.rotation.y = Math.PI * 0.92;
 
-    // Simple car body
-    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x2e3a38, roughness: 0.35, metalness: 0.25 });
-    const body = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.8, 4.2), bodyMat);
-    body.position.y = 0.7;
-    body.castShadow = true;
-    carGroup.add(body);
+    const paint = new THREE.MeshStandardMaterial({ color: 0x2b3a37, roughness: 0.52, metalness: 0.35 });
+    const trim = new THREE.MeshStandardMaterial({ color: 0x14171a, roughness: 0.7, metalness: 0.4 });
+    const chrome = new THREE.MeshStandardMaterial({ color: 0xb8bdc4, roughness: 0.28, metalness: 0.9 });
+    const rubber = new THREE.MeshStandardMaterial({ color: 0x0c0d0f, roughness: 0.95, metalness: 0.0 });
+    const glassMat = new THREE.MeshStandardMaterial({
+      color: 0x0a1014, roughness: 0.12, metalness: 0.6, transparent: true, opacity: 0.75
+    });
 
-    // Roof
-    const roof = new THREE.Mesh(new THREE.BoxGeometry(1.85, 0.6, 2.2), bodyMat);
-    roof.position.set(0, 1.25, -0.2);
-    carGroup.add(roof);
+    const add = (geo, mat, x, y, z, rx = 0, ry = 0, rz = 0) => {
+      const m = new THREE.Mesh(geo, mat);
+      m.position.set(x, y, z);
+      m.rotation.set(rx, ry, rz);
+      m.castShadow = true;
+      carGroup.add(m);
+      return m;
+    };
 
-    // Windows (black)
-    const glassMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.05, metalness: 0.9 });
-    const windshield = new THREE.Mesh(new THREE.BoxGeometry(1.84, 0.52, 0.1), glassMat);
-    windshield.position.set(0, 1.2, 0.95);
-    windshield.rotation.x = 0.25;
-    carGroup.add(windshield);
+    // --- lower body: sills, then the main tub ---
+    add(new THREE.BoxGeometry(1.94, 0.34, 4.30), trim, 0, 0.42, 0);
+    add(new THREE.BoxGeometry(2.00, 0.46, 4.16), paint, 0, 0.78, 0);
 
-    const rear = new THREE.Mesh(new THREE.BoxGeometry(1.84, 0.45, 0.1), glassMat);
-    rear.position.set(0, 1.2, -1.35);
-    rear.rotation.x = -0.2;
-    carGroup.add(rear);
+    // Bonnet and boot, slightly lower than the cabin so the profile steps.
+    add(new THREE.BoxGeometry(1.92, 0.22, 1.34), paint, 0, 1.06, 1.34);
+    add(new THREE.BoxGeometry(1.92, 0.24, 1.02), paint, 0, 1.07, -1.55);
 
-    // Headlights (glow when near)
-    const hlGeo = new THREE.BoxGeometry(0.2, 0.16, 0.08);
-    const hlMat = new THREE.MeshBasicMaterial({ color: 0xfef9c3 });
-    const hlLeft = new THREE.Mesh(hlGeo, hlMat);
-    hlLeft.position.set(-0.7, 0.55, 2.12);
-    carGroup.add(hlLeft);
-    const hlRight = hlLeft.clone();
-    hlRight.position.set(0.7, 0.55, 2.12);
-    carGroup.add(hlRight);
+    // --- cabin ---
+    add(new THREE.BoxGeometry(1.80, 0.62, 2.10), paint, 0, 1.36, -0.18);
+    // Roof panel, inset so the pillars read.
+    add(new THREE.BoxGeometry(1.68, 0.10, 1.94), paint, 0, 1.70, -0.18);
 
-    // Interior steering wheel / seat blocked view could be added
-    // Interactable car
+    // Glass: raked windscreen, backlight, and the side windows.
+    add(new THREE.BoxGeometry(1.66, 0.60, 0.07), glassMat, 0, 1.40, 0.88, -0.38);
+    add(new THREE.BoxGeometry(1.66, 0.54, 0.07), glassMat, 0, 1.42, -1.22, 0.32);
+    add(new THREE.BoxGeometry(0.06, 0.44, 1.72), glassMat, 0.88, 1.44, -0.20);
+    add(new THREE.BoxGeometry(0.06, 0.44, 1.72), glassMat, -0.88, 1.44, -0.20);
+
+    // A hint of interior so the cabin is not a void behind the glass.
+    add(new THREE.BoxGeometry(1.54, 0.34, 0.44), trim, 0, 1.18, -0.60);   // bench seat
+    add(new THREE.BoxGeometry(1.54, 0.40, 0.16), trim, 0, 1.36, -0.86);   // seat back
+    add(new THREE.CylinderGeometry(0.19, 0.19, 0.04, 14), trim, -0.42, 1.34, 0.52, 1.15);
+
+    // --- wheels, in arches, actually touching the ground ---
+    const tyreGeo = new THREE.CylinderGeometry(0.36, 0.36, 0.24, 16);
+    const hubGeo = new THREE.CylinderGeometry(0.17, 0.17, 0.26, 12);
+    for (const [wx, wz] of [[0.94, 1.34], [-0.94, 1.34], [0.94, -1.40], [-0.94, -1.40]]) {
+      add(tyreGeo, rubber, wx, 0.36, wz, 0, 0, Math.PI / 2);
+      add(hubGeo, chrome, wx, 0.36, wz, 0, 0, Math.PI / 2);
+      // Arch lip above each wheel.
+      add(new THREE.BoxGeometry(0.10, 0.30, 0.92), trim, wx * 1.02, 0.72, wz);
+    }
+
+    // --- bumpers, grille, lights ---
+    add(new THREE.BoxGeometry(2.04, 0.22, 0.18), chrome, 0, 0.60, 2.12);
+    add(new THREE.BoxGeometry(2.04, 0.22, 0.18), chrome, 0, 0.60, -2.12);
+    add(new THREE.BoxGeometry(1.40, 0.26, 0.10), trim, 0, 0.90, 2.10);   // grille
+
+    // Headlights: dead, because the car is dead. They read as glass, not lamps.
+    const deadLamp = new THREE.MeshStandardMaterial({
+      color: 0x6b6f5a, roughness: 0.25, metalness: 0.3
+    });
+    add(new THREE.BoxGeometry(0.42, 0.22, 0.10), deadLamp, 0.68, 0.94, 2.12);
+    add(new THREE.BoxGeometry(0.42, 0.22, 0.10), deadLamp, -0.68, 0.94, 2.12);
+
+    // Tail lights still have a trickle of charge - the one warm point in the
+    // parking lot, and a landmark for finding the car again in the dark.
+    const tailMat = new THREE.MeshBasicMaterial({ color: 0x8c1d1d });
+    add(new THREE.BoxGeometry(0.40, 0.20, 0.08), tailMat, 0.70, 0.98, -2.14);
+    add(new THREE.BoxGeometry(0.40, 0.20, 0.08), tailMat, -0.70, 0.98, -2.14);
+
+    // Wing mirrors and door shutlines.
+    add(new THREE.BoxGeometry(0.20, 0.12, 0.08), trim, 1.02, 1.32, 0.62);
+    add(new THREE.BoxGeometry(0.20, 0.12, 0.08), trim, -1.02, 1.32, 0.62);
+    add(new THREE.BoxGeometry(0.02, 0.44, 0.04), trim, 1.01, 0.86, -0.02);
+    add(new THREE.BoxGeometry(0.02, 0.44, 0.04), trim, -1.01, 0.86, -0.02);
+
+    // Interactable proxy (invisible, covers the whole car).
     const carProxy = new THREE.Mesh(
-      new THREE.BoxGeometry(2.2, 1.4, 4.6),
+      new THREE.BoxGeometry(2.2, 1.8, 4.6),
       new THREE.MeshBasicMaterial({ visible: false })
     );
-    carProxy.position.y = 0.7;
+    carProxy.position.y = 0.9;
     carProxy.userData = { type: 'car' };
     carGroup.add(carProxy);
     this.propFactory.interactables.push(carProxy);
 
     this.scene.add(carGroup);
     this.carGroup = carGroup;
+
+    // The car is solid. Without this the player walks straight through the
+    // one object the whole intro is about.
+    //
+    // The collider is added as a CHILD of carGroup rather than as a world-
+    // axis box, because the car is rotated ~166 degrees: an axis-aligned
+    // proxy would either be swapped (blocking a 4.4m span across the car's
+    // width) or have to be a loose 5m square that swallows the spot the
+    // player is teleported to when they step out. As a child it inherits the
+    // rotation, and PlayerController's Box3 is computed from the transformed
+    // mesh, so it hugs the actual footprint.
+    const carCollider = new THREE.Mesh(
+      new THREE.BoxGeometry(1.98, 1.7, 4.3),
+      new THREE.MeshBasicMaterial({ visible: false })
+    );
+    carCollider.position.y = 0.85;
+    carCollider.name = 'car_collider';
+    carGroup.add(carCollider);
+    carGroup.updateMatrixWorld(true);
+    this.colliders.push(carCollider);
 
     // Small flashlight battery near car as lure
     const bat = this.propFactory.createBatteryPickup(-1, 0.2, -40);

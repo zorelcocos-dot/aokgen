@@ -90,8 +90,12 @@ const seen = new Set();
 const reach = [];
 
 player.position.y = player.playerHeight;
-const startI = Math.round((3.4 - MINX) / STEP);
-const startJ = Math.round((-40.2 - MINZ) / STEP);
+// Must match Game.exitCar()'s spawn: the point the player actually stands on
+// when they step out of the car. Seeding the fill anywhere else (e.g. inside
+// the car's own collider) reports the entire map as unreachable.
+const SPAWN = { x: 4.94, z: -41.5 };
+const startI = Math.round((SPAWN.x - MINX) / STEP);
+const startJ = Math.round((SPAWN.z - MINZ) / STEP);
 const stack = [[startI, startJ]];
 seen.add(key(startI, startJ));
 
@@ -145,7 +149,7 @@ if (voids.length) {
 
 // --- key rooms reachable? ---
 const rooms = {
-  'car spawn': [3.4, -40.2],
+  'car spawn': [4.94, -41.5],
   'parking lot': [0, -34],
   'front door': [0, -29],
   'dining': [0, -18],

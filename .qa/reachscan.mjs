@@ -64,7 +64,8 @@ const seen = new Set(); const reach = [];
 const key = (i, j) => j * W + i;
 const wb = player.worldBounds;
 player.position.y = player.playerHeight;
-const si = Math.round((3.4 - MINX) / STEP), sj = Math.round((-40.2 - MINZ) / STEP);
+// Matches Game.exitCar()'s spawn - see mapscan.mjs.
+const si = Math.round((4.94 - MINX) / STEP), sj = Math.round((-41.5 - MINZ) / STEP);
 const stack = [[si, sj]]; seen.add(key(si, sj));
 while (stack.length) {
   const [i, j] = stack.pop();

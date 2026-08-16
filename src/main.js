@@ -344,7 +344,10 @@ class Game {
     if (this.carRain) this.timers.setTimeout(() => this.carRain.classList.remove('active'), 1200);
 
     // Step out beside the driver's door.
-    this.player.position.set(3.4, this.player.playerHeight, -40.2);
+    // (3.4, -40.2) was inside the car's footprint - harmless while the car had
+    // no collider, but it would drop the player inside solid geometry now that
+    // it has one. This spot is clear of the body on the driver's flank.
+    this.player.position.set(4.94, this.player.playerHeight, -41.5);
     this.player.targetHeight = this.player.playerHeight;
     this.player.yaw = Math.PI * -0.15;
     this.player.addScreenShake(0.12, 0.4);
