@@ -46,8 +46,13 @@
     </div>
 
     <div id="quest-banner"></div>
-    <div id="loot-notification"></div>
-    <div id="ambient-note" class="ambient-note"></div>
+
+    <!-- Transient messages share one stacking column so a pickup and an
+         ambient story line can never draw on top of each other. -->
+    <div id="message-stack">
+      <div id="loot-notification"></div>
+      <div id="ambient-note" class="ambient-note"></div>
+    </div>
 
     <div class="hud-bottom">
       <div class="vitals-group">
@@ -151,6 +156,28 @@
     </div>
 
     <div class="version-tag">Build ver. 11.11.11 - "The 11th Spice"</div>
+  </div>
+
+  <!-- Pause Menu.
+       Losing pointer lock (ESC, alt-tab, clicking away) used to leave the
+       game running with mouse-look dead and no way to tell it had happened -
+       the player was stuck looking straight ahead. Now that state is an
+       explicit, visible pause. -->
+  <div id="pause-menu" class="pause-menu">
+    <div class="pause-card">
+      <div class="pause-title">PAUSED</div>
+      <div class="pause-sub">TAPE STOPPED - STORE #09</div>
+      <div class="pause-controls">
+        <div class="ctrl-row"><span class="k">WASD</span> Move <span class="k">MOUSE</span> Look <span class="k">SHIFT</span> Sprint</div>
+        <div class="ctrl-row"><span class="k">C</span> Crouch <span class="k">F</span> Flashlight <span class="k">E</span> Interact</div>
+        <div class="ctrl-row"><span class="k">Click</span> Use Tool <span class="k">Right Click</span> Focus Beam <span class="k">H</span> Hide</div>
+      </div>
+      <label class="opt-label pause-opt">SENSITIVITY
+        <input id="pause-sens" type="range" min="0.0008" max="0.006" step="0.0002" value="0.0025">
+      </label>
+      <button id="resume-btn" class="btn-main">RESUME</button>
+      <div class="pause-hint">CLICK ANYWHERE TO RESUME</div>
+    </div>
   </div>
 
   <!-- Death Screen -->

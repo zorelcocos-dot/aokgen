@@ -1,0 +1,32 @@
+{
+  "chicken_monster": {
+    "cols": 4,
+    "rows": 2,
+    "frame": 256
+  },
+  "chicken_hatchling": {
+    "cols": 4,
+    "rows": 4,
+    "frame": 256
+  },
+  "colonel_stalker": {
+    "cols": 4,
+    "rows": 2,
+    "frame": 256
+  },
+  "employee_hands": {
+    "cols": 4,
+    "rows": 2,
+    "frame": 256
+  },
+  "kfc_props": {
+    "cols": 4,
+    "rows": 2,
+    "frame": 256
+  },
+  "kfc_items2": {
+    "cols": 4,
+    "rows": 2,
+    "frame": 256
+  }
+}

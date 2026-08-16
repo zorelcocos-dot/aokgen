@@ -6,11 +6,32 @@ import * as THREE from 'three';
  */
 
 export class PropFactory {
-  constructor(scene, materials, audio) {
+  constructor(scene, materials, audio, textureLibrary = null) {
+    /**
+     * Seeded PRNG. Prop dressing (which booths get a tray, how big a grease
+     * puddle is) used Math.random(), so the level looked different on every
+     * reload and no two QA runs matched. Seeded so it still looks scattered
+     * but is identical every time.
+     */
+    this._seed = 0x9e3779b9;
     this.scene = scene;
     this.materials = materials;
     this.audio = audio;
+    /** Shared texture cache; null in the headless QA harness. */
+    this.tex = textureLibrary;
     this.interactables = [];
+  }
+
+  /** Deterministic replacement for Math.random(). */
+  rand() {
+    this._seed = (this._seed * 1664525 + 1013904223) >>> 0;
+    return this._seed / 0x100000000;
+  }
+
+  /** Textured surface if the library is available, else the legacy material. */
+  surface(name, w, h, fallback, overrides) {
+    if (this.tex) return this.tex.get(name, w, h, overrides);
+    return fallback || this.materials.metal;
   }
 
   // --- CORE PROPS (Improved) ---
@@ -20,7 +41,7 @@ export class PropFactory {
     group.position.set(x, y, z);
 
     const bodyGeo = new THREE.BoxGeometry(3.8, 1.25, 1.3);
-    const body = new THREE.Mesh(bodyGeo, this.materials.metal);
+    const body = new THREE.Mesh(bodyGeo, this.surface('metal', 3.8, 1.25, this.materials.metal));
     body.position.y = 0.625;
     body.castShadow = true;
     body.receiveShadow = true;
@@ -50,7 +71,7 @@ export class PropFactory {
     group.userData = { type: 'fryer_station', loadedCount: 0, maxMeat: 2 };
     this.interactables.push(group);
 
-    const hood = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.85, 1.7), this.materials.metal);
+    const hood = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.85, 1.7), this.surface('metal', 4.2, 0.85, this.materials.metal));
     hood.position.set(0, 3.25, 0);
     hood.castShadow = true;
     group.add(hood);
@@ -70,7 +91,7 @@ export class PropFactory {
   createRotisserieOven(x, y, z) {
     const group = new THREE.Group();
     group.position.set(x, y, z);
-    const cabinet = new THREE.Mesh(new THREE.BoxGeometry(1.65, 2.25, 1.25), this.materials.metal);
+    const cabinet = new THREE.Mesh(new THREE.BoxGeometry(1.65, 2.25, 1.25), this.surface('metal', 1.65, 2.25, this.materials.metal));
     cabinet.position.y = 1.125;
     cabinet.castShadow = true;
     group.add(cabinet);
@@ -135,11 +156,11 @@ export class PropFactory {
     group.add(leg);
 
     // On table: tray, cup, papers for storytelling if not broken
-    if (!broken && Math.random() < 0.7) {
+    if (!broken && this.rand() < 0.7) {
       const tray = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.03, 0.35), new THREE.MeshStandardMaterial({ color: 0xc0392b }));
       tray.position.set(0, 0.81, 0);
       group.add(tray);
-      if (Math.random() < 0.5) {
+      if (this.rand() < 0.5) {
         const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.18, 10), new THREE.MeshStandardMaterial({ color: 0xf5f5f5 }));
         cup.position.set(0.18, 0.9, 0.12);
         group.add(cup);
@@ -212,7 +233,7 @@ export class PropFactory {
   }
 
   createGreaseSpill(x, y, z) {
-    const puddleGeo = new THREE.CircleGeometry(1.25 + Math.random() * 0.5, 14);
+    const puddleGeo = new THREE.CircleGeometry(1.25 + this.rand() * 0.5, 14);
     const puddleMat = new THREE.MeshStandardMaterial({ color: 0x2e1f0f, roughness: 0.04, metalness: 0.28, transparent: true, opacity: 0.88 });
     const puddle = new THREE.Mesh(puddleGeo, puddleMat);
     puddle.rotation.x = -Math.PI / 2;
@@ -390,7 +411,22 @@ export class PropFactory {
     if (textureUrl) {
       const loader = new THREE.TextureLoader();
       loader.load(textureUrl, tex => {
-        const photo = new THREE.Mesh(new THREE.PlaneGeometry(0.34, 0.42), new THREE.MeshStandardMaterial({ map: tex }));
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.magFilter = THREE.NearestFilter;
+        tex.minFilter = THREE.NearestFilter;
+        tex.generateMipmaps = false;
+        tex.wrapS = THREE.ClampToEdgeWrapping;
+        tex.wrapT = THREE.ClampToEdgeWrapping;
+        // The source is a 4x2 sprite atlas, not a photo. Framing the whole
+        // sheet showed every animation cell (and, before the sheets were
+        // baked, the magenta background) inside a 34cm desk frame. Show one
+        // cell instead - the pair of hands in the last column.
+        tex.repeat.set(1 / 4, 1 / 2);
+        tex.offset.set(3 / 4, 1 / 2);
+        const photo = new THREE.Mesh(
+          new THREE.PlaneGeometry(0.34, 0.42),
+          new THREE.MeshBasicMaterial({ map: tex, transparent: true, alphaTest: 0.2 })
+        );
         photo.position.set(0.025, 0, 0);
         photo.rotation.y = 0;
         group.add(photo);

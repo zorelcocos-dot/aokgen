@@ -11,13 +11,51 @@ import { PropFactory } from './PropFactory.js';
  */
 
 export class LevelBuilder {
-  constructor(scene, pbrTextures, audio) {
+  constructor(scene, pbrTextures, audio, textureLibrary = null) {
     this.scene = scene;
     this.pbr = pbrTextures;
     this.audio = audio;
+    /**
+     * Shared texture/material cache. Every surface in the level asks this for
+     * its material, so tiling, filtering and colour space are consistent
+     * everywhere instead of being re-invented per mesh.
+     */
+    this.tex = textureLibrary;
     this.colliders = [];
     this.initMaterials();
-    this.propFactory = new PropFactory(scene, this.materials, audio);
+    this.propFactory = new PropFactory(scene, this.materials, audio, textureLibrary);
+  }
+
+  /**
+   * Textured material for a surface of a known world size, falling back to the
+   * legacy flat material when no TextureLibrary is present (the headless QA
+   * harness builds the level without a renderer).
+   */
+  surface(name, width, height, overrides) {
+    if (this.tex) return this.tex.get(name, width, height, overrides);
+    return this.materials[this._fallbackKey(name)] || this.materials.dirtyWall;
+  }
+
+  _fallbackKey(name) {
+    return {
+      floorDining: 'floor', floorKitchen: 'floor', floorFreezer: 'metal',
+      floorOffice: 'officeWall', floorConcrete: 'concrete',
+      asphalt: 'outdoorFloor', ground: 'forestGround',
+      wallDining: 'diningWall', wallTile: 'tileWall', wallOffice: 'officeWall',
+      wallConcrete: 'concrete', wallBrick: 'dirtyWall', metal: 'metal',
+      ceiling: 'ceiling', wood: 'dirtyWall'
+    }[name] || 'dirtyWall';
+  }
+
+  /**
+   * Deterministic PRNG. The level used Math.random() for debris, papers and
+   * ceiling tiles, so every reload produced a different world and no two QA
+   * runs (or two players' screenshots) ever matched. Seeded here so the
+   * dressing is identical every time while still looking scattered.
+   */
+  rand() {
+    this._seed = (this._seed ?? 0x2f6e2b1) * 1664525 + 1013904223 >>> 0;
+    return this._seed / 0x100000000;
   }
 
   initMaterials() {
@@ -55,7 +93,15 @@ export class LevelBuilder {
       menuBoard: new THREE.MeshBasicMaterial({ map: this.pbr.menu }),
       freezerDoor: new THREE.MeshStandardMaterial({ map: this.pbr.freezerDoor, roughness: 0.32, metalness: 0.72 }),
       glass: new THREE.MeshStandardMaterial({ color: 0x88ccff, roughness: 0.08, metalness: 0.05, transparent: true, opacity: 0.48 }),
-      concrete: new THREE.MeshStandardMaterial({ color: 0x3c3c3d, roughness: 0.9 })
+      concrete: new THREE.MeshStandardMaterial({ color: 0x3c3c3d, roughness: 0.9 }),
+      // Shared one-off materials. These were allocated inside loops before, so
+      // 24 debris boxes meant 24 identical materials and 24 draw states.
+      parkingLine: new THREE.MeshStandardMaterial({ color: 0x9a9a94, roughness: 0.85 }),
+      roadDash: new THREE.MeshStandardMaterial({ color: 0x8a7420, roughness: 0.8 }),
+      debris: new THREE.MeshStandardMaterial({ color: 0x2e2e30, roughness: 0.95 }),
+      trunk: new THREE.MeshStandardMaterial({ color: 0x15100e, roughness: 0.98 }),
+      leaves: new THREE.MeshStandardMaterial({ color: 0x0a1410, roughness: 0.95 }),
+      paper: new THREE.MeshStandardMaterial({ color: 0xbfb597, roughness: 0.9 })
     };
 
     if (this.pbr.floor.albedo) {
@@ -88,91 +134,173 @@ export class LevelBuilder {
   }
 
   // --- OUTDOOR ---
+  /**
+   * The outdoor shell. Two things matter here and both used to be wrong:
+   *
+   * 1. Ground coverage. The player's worldBounds are x[-34..34] z[-54..38],
+   *    but the ground plane only covered z -77..13 around x +-40, so walking
+   *    south-east or along the south wall put the camera over open space with
+   *    the skybox visible below the feet - the "falling off the map" the
+   *    build was reported with. The ground now covers the entire clamp box
+   *    with margin, so there is floor under every legal position.
+   *
+   * 2. Z-fighting. Ground, parking and road were stacked at y=0/0.01/0.02
+   *    with overlapping footprints, so the whole lot strobed as the camera
+   *    moved. They are now disjoint in plan and separated by GROUND_STEP.
+   */
   buildOutdoor() {
-    // Main outdoor ground extends north to -60
-    const outFloorGeo = new THREE.PlaneGeometry(80, 90);
-    const outFloor = new THREE.Mesh(outFloorGeo, this.materials.outdoorFloor);
+    const GROUND_STEP = 0.012;
+
+    // Base terrain: covers the full walkable clamp box (+8m of visual margin)
+    // so the horizon never shows a cut edge.
+    const outFloor = new THREE.Mesh(
+      new THREE.PlaneGeometry(120, 140),
+      this.surface('ground', 120, 140)
+    );
     outFloor.rotation.x = -Math.PI / 2;
-    outFloor.position.set(0, 0, -32);
+    outFloor.position.set(0, 0, -20);
     outFloor.receiveShadow = true;
+    outFloor.name = 'ground_base';
     this.scene.add(outFloor);
 
-    // Asphalt parking with lines
-    const parkingGeo = new THREE.PlaneGeometry(34, 28);
-    const parking = new THREE.Mesh(parkingGeo, new THREE.MeshStandardMaterial({ color: 0x161619, roughness: 0.85 }));
+    // Asphalt parking apron in front of the store.
+    const parking = new THREE.Mesh(
+      new THREE.PlaneGeometry(46, 26),
+      this.surface('asphalt', 46, 26)
+    );
     parking.rotation.x = -Math.PI / 2;
-    parking.position.set(0, 0.01, -34);
+    parking.position.set(0, GROUND_STEP, -42);
     parking.receiveShadow = true;
+    parking.name = 'parking_apron';
     this.scene.add(parking);
 
-    // Parking lines (white)
+    // Parking bay lines, painted onto the apron.
+    const lineMat = this.materials.parkingLine;
     for (let i = -3; i <= 3; i++) {
       if (i === 0) continue;
-      const line = new THREE.Mesh(
-        new THREE.BoxGeometry(0.14, 0.02, 8),
-        new THREE.MeshStandardMaterial({ color: 0xdddddd })
-      );
-      line.position.set(i * 3.2, 0.02, -34);
+      const line = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.02, 8), lineMat);
+      line.position.set(i * 3.2, GROUND_STEP + 0.01, -38);
       this.scene.add(line);
     }
 
-    // Road north
-    const roadGeo = new THREE.PlaneGeometry(12, 40);
-    const road = new THREE.Mesh(roadGeo, new THREE.MeshStandardMaterial({ color: 0x0f0f12, roughness: 0.9 }));
+    // Route 17 running north, clear of the apron so the two never overlap.
+    const road = new THREE.Mesh(
+      new THREE.PlaneGeometry(12, 42),
+      this.surface('asphalt', 12, 42)
+    );
     road.rotation.x = -Math.PI / 2;
-    road.position.set(0, 0.02, -68);
+    road.position.set(0, GROUND_STEP, -76);
+    road.name = 'route_17';
     this.scene.add(road);
 
-    // Road center line dashed yellow
-    for (let z = -88; z < -48; z += 4) {
+    for (let z = -96; z < -56; z += 4) {
       const dash = new THREE.Mesh(
         new THREE.BoxGeometry(0.22, 0.03, 1.6),
-        new THREE.MeshBasicMaterial({ color: 0xeab308 })
+        this.materials.roadDash
       );
-      dash.position.set(0, 0.03, z);
+      dash.position.set(0, GROUND_STEP + 0.01, z);
       this.scene.add(dash);
     }
 
-    // Forest tree walls (simple billboards / cylinders for performance)
+    // A hard treeline wall so the player cannot wander into the void even if
+    // the clamp is ever widened, plus the visual forest.
     this.addForestRing();
+    this.buildOuterBarrier();
 
-    // Trash, debris outdoors
-    const debrisMat = new THREE.MeshStandardMaterial({ color: 0x3a3a3a });
+    // Trash and debris, kept on the ground plane.
+    const debrisMat = this.materials.debris;
     for (let i = 0; i < 24; i++) {
-      const box = new THREE.Mesh(new THREE.BoxGeometry(0.2 + Math.random() * 0.4, 0.15, 0.2), debrisMat);
-      box.position.set(
-        (Math.random() - 0.5) * 46,
-        0.08,
-        -28 - Math.random() * 34
+      const box = new THREE.Mesh(
+        new THREE.BoxGeometry(0.2 + this.rand() * 0.4, 0.15, 0.2),
+        debrisMat
       );
-      box.rotation.y = Math.random() * Math.PI;
+      box.position.set((this.rand() - 0.5) * 46, 0.08, -28 - this.rand() * 26);
+      box.rotation.y = this.rand() * Math.PI;
       this.scene.add(box);
     }
   }
 
-  addForestRing() {
-    // Create forest as distant planes + simple trunks around perimeter
-    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x191412, roughness: 0.95 });
-    const leavesMat = new THREE.MeshStandardMaterial({ color: 0x0e1a10, roughness: 0.9 });
-
-    // Ring positions far outside
-    for (let i = 0; i < 60; i++) {
-      const angle = (i / 60) * Math.PI * 2;
-      const radius = 42 + Math.random() * 16;
-      const x = Math.cos(angle) * radius;
-      const z = Math.sin(angle) * radius - 32;
-      // Skip gap at front entrance to restaurant
-      if (Math.abs(x) < 6 && z > -36 && z < -28) continue;
-
-      const h = 5 + Math.random() * 5;
-      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.28, h, 6), trunkMat);
-      trunk.position.set(x, h / 2, z);
-      this.scene.add(trunk);
-      // Leaves blob
-      const leaves = new THREE.Mesh(new THREE.SphereGeometry(0.9 + Math.random() * 0.7, 6, 5), leavesMat);
-      leaves.position.set(x, h - 0.2, z);
-      this.scene.add(leaves);
+  /**
+   * Invisible collision wall just inside the player's clamp box.
+   *
+   * The clamp alone was not enough: it stopped the *position* at the boundary
+   * but the player could still slide along an edge that had nothing under it.
+   * With a real collider the movement code refuses the step in the first
+   * place, so the edge behaves like a wall instead of an invisible cliff.
+   */
+  buildOuterBarrier() {
+    const h = 6;
+    const t = 1.0;
+    const minX = -35, maxX = 35, minZ = -55, maxZ = 39;
+    const spans = [
+      [(minX + maxX) / 2, h / 2, minZ - t / 2, maxX - minX + t * 2, h, t],
+      [(minX + maxX) / 2, h / 2, maxZ + t / 2, maxX - minX + t * 2, h, t],
+      [minX - t / 2, h / 2, (minZ + maxZ) / 2, t, h, maxZ - minZ + t * 2],
+      [maxX + t / 2, h / 2, (minZ + maxZ) / 2, t, h, maxZ - minZ + t * 2]
+    ];
+    for (const [x, y, z, w, hh, d] of spans) {
+      const wall = new THREE.Mesh(
+        new THREE.BoxGeometry(w, hh, d),
+        new THREE.MeshBasicMaterial({ visible: false })
+      );
+      wall.position.set(x, y, z);
+      wall.name = 'world_barrier';
+      wall.updateMatrixWorld(true);
+      this.scene.add(wall);
+      this.colliders.push(wall);
     }
+  }
+
+  /**
+   * Perimeter forest. Two instanced meshes instead of 120 separate ones: the
+   * old loop added 60 trunk meshes and 60 leaf spheres as individual scene
+   * children, which is 120 draw calls of pure background.
+   */
+  addForestRing() {
+    const COUNT = 96;
+    const trunkGeo = new THREE.CylinderGeometry(0.2, 0.34, 1, 6);
+    const leavesGeo = new THREE.ConeGeometry(1.5, 4.2, 7);
+
+    const trunks = new THREE.InstancedMesh(trunkGeo, this.materials.trunk, COUNT);
+    const leaves = new THREE.InstancedMesh(leavesGeo, this.materials.leaves, COUNT);
+    trunks.frustumCulled = false;
+    leaves.frustumCulled = false;
+
+    const m = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const pos = new THREE.Vector3();
+    const scl = new THREE.Vector3();
+    let n = 0;
+
+    for (let i = 0; i < COUNT * 3 && n < COUNT; i++) {
+      const angle = (i / COUNT) * Math.PI * 2;
+      const radius = 44 + this.rand() * 20;
+      const x = Math.cos(angle) * radius;
+      const z = Math.sin(angle) * radius - 26;
+      // Keep the approach to the front door and the road clear.
+      if (Math.abs(x) < 9 && z < -26) continue;
+
+      const h = 6 + this.rand() * 6;
+      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), this.rand() * Math.PI);
+
+      pos.set(x, h / 2, z);
+      scl.set(1, h, 1);
+      m.compose(pos, q, scl);
+      trunks.setMatrixAt(n, m);
+
+      pos.set(x, h * 0.86, z);
+      const s = 0.8 + this.rand() * 0.7;
+      scl.set(s, s, s);
+      m.compose(pos, q, scl);
+      leaves.setMatrixAt(n, m);
+      n++;
+    }
+    trunks.count = n;
+    leaves.count = n;
+    trunks.instanceMatrix.needsUpdate = true;
+    leaves.instanceMatrix.needsUpdate = true;
+    this.scene.add(trunks);
+    this.scene.add(leaves);
   }
 
   // --- ARCHITECTURE INDOOR ---
@@ -180,26 +308,69 @@ export class LevelBuilder {
     const wallThickness = 0.38;
     const roomHeight = 4.25;
 
-    // Main floor interior (dining + etc)
-    const floorGeo = new THREE.PlaneGeometry(60, 70);
-    const floor = new THREE.Mesh(floorGeo, this.materials.floor);
-    floor.rotation.x = -Math.PI / 2;
-    floor.position.set(0, 0, 2.5);
-    floor.receiveShadow = true;
-    this.scene.add(floor);
+    // --- FLOORS ---
+    // One flat plane used to cover the entire interior, which meant the
+    // dining room, the kitchen, the walk-in freezer and the carpeted office
+    // all shared the same checkerboard. Each zone now gets its own surface,
+    // matching the zone map in LightingSystem.getCurrentZone(), so rooms are
+    // visually distinct and the footstep audio matches what you can see.
+    //
+    // They sit fractionally above y=0 (the interior slab) so they can never
+    // z-fight with the exterior ground that passes underneath the building.
+    const FLOOR_Y = 0.02;
+    const zoneFloors = [
+      // [name, centreX, centreZ, width, depth, surface]
+      ['dining',   0,   -17,   60, 26, 'floorDining'],
+      ['kitchen',  0,     9,   28, 26, 'floorKitchen'],
+      ['freezer', 22,    11,   16, 22, 'floorFreezer'],
+      ['office', -22,    11,   16, 22, 'floorOffice'],
+      ['storage', -22,   28.5, 16, 13, 'floorConcrete'],
+      ['basement', 8,    28.5, 44, 13, 'floorConcrete']
+    ];
+    for (const [name, cx, cz, w, d, surf] of zoneFloors) {
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, d), this.surface(surf, w, d));
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.position.set(cx, FLOOR_Y, cz);
+      mesh.receiveShadow = true;
+      mesh.name = `floor_${name}`;
+      this.scene.add(mesh);
+    }
+
+    // Interior slab under all of it: guarantees there is never a gap between
+    // two zone floors, and gives the building a floor even where a zone
+    // rectangle does not quite reach a wall.
+    const slab = new THREE.Mesh(
+      new THREE.PlaneGeometry(62, 72),
+      this.surface('floorConcrete', 62, 72)
+    );
+    slab.rotation.x = -Math.PI / 2;
+    slab.position.set(0, 0.008, 2.5);
+    slab.receiveShadow = true;
+    slab.name = 'floor_slab';
+    this.scene.add(slab);
 
     // Ceiling
-    const ceilingGeo = new THREE.PlaneGeometry(60, 70);
-    const ceiling = new THREE.Mesh(ceilingGeo, this.materials.ceiling);
+    const ceiling = new THREE.Mesh(
+      new THREE.PlaneGeometry(62, 72),
+      this.surface('ceiling', 62, 72)
+    );
     ceiling.rotation.x = Math.PI / 2;
     ceiling.position.set(0, roomHeight, 2.5);
+    ceiling.name = 'ceiling';
     this.scene.add(ceiling);
 
     // Exterior walls (restaurant shell)
     // North wall (front facade) with entrance door gap (X -2 to 2)
-    this.createWall(-15, roomHeight / 2, -30, 26, roomHeight, wallThickness, this.materials.diningWall); // west part
-    this.createWall(15, roomHeight / 2, -30, 26, roomHeight, wallThickness, this.materials.diningWall); // east part
-    this.createWall(0, 3.6, -30, 4.0, 1.2, wallThickness, this.materials.diningWall); // lintel over entrance
+    this.createWall(-15, roomHeight / 2, -30, 26, roomHeight, wallThickness, 'wallDining'); // west part
+    this.createWall(15, roomHeight / 2, -30, 26, roomHeight, wallThickness, 'wallDining'); // east part
+    this.createWall(0, 3.6, -30, 4.0, 1.2, wallThickness, 'wallDining'); // lintel over entrance
+
+    // Brick skin on the OUTSIDE of the front facade. The shell walls are
+    // textured for the interior, so from the parking lot the building used to
+    // show dining-room wallpaper - which is what made the exterior read as
+    // untextured flat blocks. These are visual only (the shell already
+    // collides) and sit just proud of it so they never z-fight.
+    this.buildExteriorSkin(roomHeight);
 
     // Entrance frame (visual)
     const entranceFrameMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1e });
@@ -207,21 +378,21 @@ export class LevelBuilder {
     this.createWall(2, roomHeight / 2, -30, 0.25, roomHeight, wallThickness, entranceFrameMat);
 
     // South wall back dock Z=35
-    this.createWall(0, roomHeight / 2, 35, 60, roomHeight, wallThickness, this.materials.metal);
+    this.createWall(0, roomHeight / 2, 35, 60, roomHeight, wallThickness, 'metal');
     // East wall X=30
-    this.createWall(30, roomHeight / 2, 2.5, wallThickness, roomHeight, 70, this.materials.metal);
+    this.createWall(30, roomHeight / 2, 2.5, wallThickness, roomHeight, 70, 'metal');
     // West wall with drive-thru window gap Z 4-6 and front entrance
-    this.createWall(-30, roomHeight / 2, -13, wallThickness, roomHeight, 34, this.materials.metal); // -30 to 4
-    this.createWall(-30, roomHeight / 2, 20.5, wallThickness, roomHeight, 29, this.materials.metal); // 6 to 35
-    this.createWall(-30, 0.5, 5, wallThickness, 1.0, 2.4, this.materials.metal); // sill
-    this.createWall(-30, 3.6, 5, wallThickness, 1.2, 2.4, this.materials.metal); // lintel
+    this.createWall(-30, roomHeight / 2, -13, wallThickness, roomHeight, 34, 'metal'); // -30 to 4
+    this.createWall(-30, roomHeight / 2, 20.5, wallThickness, roomHeight, 29, 'metal'); // 6 to 35
+    this.createWall(-30, 0.5, 5, wallThickness, 1.0, 2.4, 'metal'); // sill
+    this.createWall(-30, 3.6, 5, wallThickness, 1.2, 2.4, 'metal'); // lintel
 
     // Interior zoning:
 
     // 1. Dining vs Kitchen divider Z = -4 with service opening -3 to 3
-    this.createWall(-18, roomHeight / 2, -4, 24, roomHeight, wallThickness, this.materials.metal);
-    this.createWall(18, roomHeight / 2, -4, 24, roomHeight, wallThickness, this.materials.metal);
-    this.createWall(0, 3.6, -4, 6.0, 1.2, wallThickness, this.materials.metal);
+    this.createWall(-18, roomHeight / 2, -4, 24, roomHeight, wallThickness, 'metal');
+    this.createWall(18, roomHeight / 2, -4, 24, roomHeight, wallThickness, 'metal');
+    this.createWall(0, 3.6, -4, 6.0, 1.2, wallThickness, 'metal');
 
     // Menu board above
     const menuGeo = new THREE.BoxGeometry(6.2, 1.2, 0.2);
@@ -230,69 +401,72 @@ export class LevelBuilder {
     this.scene.add(menu);
 
     // 2. PlayPlace east separation X=15 Z -30 to -4 with archway
-    this.createWall(15, roomHeight / 2, -23, wallThickness, roomHeight, 14, this.materials.diningWall);
-    this.createWall(15, roomHeight / 2, -9, wallThickness, roomHeight, 10, this.materials.diningWall);
-    this.createWall(15, 3.6, -15, wallThickness, 1.2, 2.0, this.materials.diningWall);
+    this.createWall(15, roomHeight / 2, -23, wallThickness, roomHeight, 14, 'wallDining');
+    this.createWall(15, roomHeight / 2, -9, wallThickness, roomHeight, 10, 'wallDining');
+    this.createWall(15, 3.6, -15, wallThickness, 1.2, 2.0, 'wallDining');
 
     // 3. Restrooms west separation X -15? Actually restroom enclosure
     // Restrooms west: X -30 to -15, Z -30 to -16
-    this.createWall(-22.5, roomHeight / 2, -16, 15, roomHeight, wallThickness, this.materials.tileWall);
-    this.createWall(-15, roomHeight / 2, -26, wallThickness, roomHeight, 14, this.materials.tileWall);
-    this.createWall(-15, 3.6, -18, wallThickness, 1.2, 2.2, this.materials.tileWall);
+    this.createWall(-22.5, roomHeight / 2, -16, 15, roomHeight, wallThickness, 'wallTile');
+    this.createWall(-15, roomHeight / 2, -26, wallThickness, roomHeight, 14, 'wallTile');
+    this.createWall(-15, 3.6, -18, wallThickness, 1.2, 2.2, 'wallTile');
     // Inner restroom divider (separate janitor closet and toilets)
-    // ...leaving a 1.2m doorway at x -23.1..-21.9 that DoorSystem fills with
-    // 'janitor_closet'. Without this gap the closet (and its diesel can) was a
-    // sealed box.
-    this.createWall(-26.55, roomHeight / 2, -24, 6.9, roomHeight, wallThickness, this.materials.tileWall); // -30 to -23.1
-    this.createWall(-18.45, roomHeight / 2, -24, 6.9, roomHeight, wallThickness, this.materials.tileWall); // -21.9 to -15
-    this.createWall(-22.5, 3.6, -24, 1.2, 1.2, wallThickness, this.materials.tileWall); // lintel over the doorway
+    // ...leaving a 1.6m doorway at x -23.3..-21.7 that DoorSystem fills with
+    // 'janitor_closet'. Widened from 1.2m: with the player's collision body a
+    // 1.2m gap left barely any clearance and the closet read as blocked.
+    this.createWall(-26.65, roomHeight / 2, -24, 6.7, roomHeight, wallThickness, 'wallTile'); // -30 to -23.3
+    this.createWall(-18.35, roomHeight / 2, -24, 6.7, roomHeight, wallThickness, 'wallTile'); // -21.7 to -15
+    this.createWall(-22.5, 3.6, -24, 1.6, 1.2, wallThickness, 'wallTile'); // lintel over the doorway
 
     // 4. Walk-in Freezer Vault east X 14 to 30, Z 0 to 22
-    this.createWall(22, roomHeight / 2, 0, 16, roomHeight, wallThickness, this.materials.metal);
-    this.createWall(22, roomHeight / 2, 22, 16, roomHeight, wallThickness, this.materials.metal);
+    this.createWall(22, roomHeight / 2, 0, 16, roomHeight, wallThickness, 'metal');
+    this.createWall(22, roomHeight / 2, 22, 16, roomHeight, wallThickness, 'metal');
     // West wall X=14 with doorway Z 10-12
-    this.createWall(14, roomHeight / 2, 5, wallThickness, roomHeight, 10, this.materials.metal);
-    this.createWall(14, roomHeight / 2, 17, wallThickness, roomHeight, 10, this.materials.metal);
-    this.createWall(14, 3.6, 11, wallThickness, 1.2, 2.0, this.materials.metal);
+    this.createWall(14, roomHeight / 2, 5, wallThickness, roomHeight, 10, 'metal');
+    this.createWall(14, roomHeight / 2, 17, wallThickness, roomHeight, 10, 'metal');
+    this.createWall(14, 3.6, 11, wallThickness, 1.2, 2.0, 'metal');
 
     // Freezer internal shelves to create maze feeling
-    this.createWall(20, 1.2, 7, 0.3, 2.4, 6, this.materials.metal);
-    this.createWall(24, 1.2, 13, 0.3, 2.4, 6, this.materials.metal);
+    this.createWall(20, 1.2, 7, 0.3, 2.4, 6, 'metal');
+    this.createWall(24, 1.2, 13, 0.3, 2.4, 6, 'metal');
 
     // 5. Manager Office west X -30 to -14, Z 0 to 22
-    this.createWall(-22, roomHeight / 2, 0, 16, roomHeight, wallThickness, this.materials.officeWall);
+    this.createWall(-22, roomHeight / 2, 0, 16, roomHeight, wallThickness, 'wallOffice');
     // (the office's south wall at z=22 is built with the storage doorway below)
-    // Doorway z 10.4..11.6 exactly matches the 'office_main' leaf; the old
-    // 2m gap left a 1m hole the player could walk through beside a locked door.
-    this.createWall(-14, roomHeight / 2, 5.2, wallThickness, roomHeight, 10.4, this.materials.metal); // 0 to 10.4
-    this.createWall(-14, roomHeight / 2, 16.8, wallThickness, roomHeight, 10.4, this.materials.metal); // 11.6 to 22
-    this.createWall(-14, 3.6, 11, wallThickness, 1.2, 1.2, this.materials.metal);
+    // Doorway z 10.2..11.8 exactly matches the 'office_main' leaf.
+    this.createWall(-14, roomHeight / 2, 5.1, wallThickness, roomHeight, 10.2, 'metal'); // 0 to 10.2
+    this.createWall(-14, roomHeight / 2, 16.9, wallThickness, roomHeight, 10.2, 'metal'); // 11.8 to 22
+    this.createWall(-14, 3.6, 11, wallThickness, 1.2, 1.6, 'metal');
 
     // 6. South divider Kitchen vs Basement Z=22 X -14 to 14 with opening -2 to 2
-    // Doorway x -2..-0.8 filled by 'generator_door'.
-    this.createWall(-8, roomHeight / 2, 22, 12, roomHeight, wallThickness, this.materials.metal); // -14 to -2
-    this.createWall(6.6, roomHeight / 2, 22, 14.8, roomHeight, wallThickness, this.materials.metal); // -0.8 to 14
-    this.createWall(-1.4, 3.6, 22, 1.2, 1.2, wallThickness, this.materials.metal);
+    // Doorway x -2..-0.4 filled by 'generator_door'.
+    this.createWall(-8, roomHeight / 2, 22, 12, roomHeight, wallThickness, 'metal'); // -14 to -2
+    this.createWall(6.8, roomHeight / 2, 22, 14.4, roomHeight, wallThickness, 'metal'); // -0.4 to 14
+    this.createWall(-1.2, 3.6, 22, 1.6, 1.2, wallThickness, 'metal');
 
     // 7. Storage room (x -30..-14, z 22..35) - its north wall carries the
     // 'storage_door' doorway at x -18.6..-17.4. Previously this was a 0.3m
     // decorative stub and the office-south wall sealed the room completely.
-    this.createWall(-24.3, roomHeight / 2, 22, 11.4, roomHeight, wallThickness, this.materials.dirtyWall); // -30 to -18.6
-    this.createWall(-15.7, roomHeight / 2, 22, 3.4, roomHeight, wallThickness, this.materials.dirtyWall); // -17.4 to -14
-    this.createWall(-18, 3.6, 22, 1.2, 1.2, wallThickness, this.materials.dirtyWall); // lintel
+    this.createWall(-24.4, roomHeight / 2, 22, 11.2, roomHeight, wallThickness, 'wallConcrete'); // -30 to -18.8
+    this.createWall(-15.6, roomHeight / 2, 22, 3.2, roomHeight, wallThickness, 'wallConcrete'); // -17.2 to -14
+    this.createWall(-18, 3.6, 22, 1.6, 1.2, wallThickness, 'wallConcrete'); // lintel
 
     // 8. Generator room enclosure southeast X -2 to 8, Z 24 to 35
-    this.createWall(-2, roomHeight / 2, 26, wallThickness, roomHeight, 8, this.materials.metal);
-    this.createWall(8, roomHeight / 2, 26, wallThickness, roomHeight, 8, this.materials.metal);
-    // Already south wall is at 35, need internal garage walls
-    this.createWall(3, roomHeight / 2, 33, 10.2, roomHeight, wallThickness, this.materials.metal);
+    this.createWall(-2, roomHeight / 2, 26, wallThickness, roomHeight, 8, 'metal');
+    this.createWall(8, roomHeight / 2, 26, wallThickness, roomHeight, 8, 'metal');
 
-    // 9. Hallway walls for staff corridor between freezer and office?
-    // Actually hallway central Z 22 east-west already, but add corridor walls to guide.
-
-    // Secret grinder room hidden behind generator (southmost) accessible via vent or hidden door
-    // Wall to hide secret: at Z 34, from X -2 to 2 create false wall that looks like real but has hidden prompt
-    this.createWall(0, roomHeight / 2, 33.8, 4.5, roomHeight, wallThickness, this.materials.dirtyWall);
+    // 9. Secret grinder room, x -2..8, z 30.9..34.8.
+    //
+    // This used to be a 0.42m slot between two walls - narrower than the
+    // player's own 1.0m collision diameter - with the grinder receipt sealed
+    // inside it. The clue could only ever be grabbed by aiming through a gap
+    // from the side, and the "false wall" hid nothing because the room's
+    // flanks were open anyway.
+    //
+    // It is now an actual room: a full-width false panel closes it off, and
+    // that panel is the 'secret_wall' the interaction code already had a
+    // prompt for but nothing ever created.
+    this.buildSecretRoom(roomHeight, wallThickness);
 
     // The walk-in freezer vault door itself is owned by DoorSystem
     // (QuestManager.initDoorSystem creates it at 14, 1.5, 11). Only the static
@@ -308,9 +482,227 @@ export class LevelBuilder {
     this.scene.add(fR);
   }
 
+  /**
+   * The lit "AOKGEN" sign over the entrance, and the entrance canopy.
+   *
+   * The letters are drawn to a canvas rather than modelled, so the sign is one
+   * extra draw call. It is emissive/unlit so it stays readable from across the
+   * dark parking lot, which is the point: it is the landmark the intro sends
+   * the player towards, and the marker they navigate back to at the end.
+   */
+  buildNeonSign(roomHeight) {
+    const cv = document.createElement('canvas');
+    cv.width = 1024;
+    cv.height = 256;
+    const ctx = cv.getContext('2d');
+
+    ctx.fillStyle = '#0d0508';
+    ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.strokeStyle = '#2a1013';
+    ctx.lineWidth = 10;
+    ctx.strokeRect(5, 5, cv.width - 10, cv.height - 10);
+
+    ctx.font = 'bold 150px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    // Dead tube: the second N never lights. Cheap, and it tells the player
+    // the place has been failing for a while.
+    const text = 'AOKGEN';
+    const cx = cv.width / 2;
+    const cy = cv.height / 2 - 8;
+    ctx.shadowColor = '#ff2036';
+    ctx.shadowBlur = 42;
+    ctx.fillStyle = '#ff4d5e';
+    ctx.fillText(text, cx, cy);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#ffd7dc';
+    ctx.font = 'bold 148px monospace';
+    ctx.fillText(text, cx, cy);
+
+    // The failing final letter, painted back over in dead grey.
+    const w = ctx.measureText(text).width;
+    const lastW = ctx.measureText('N').width;
+    ctx.fillStyle = '#0d0508';
+    ctx.fillRect(cx + w / 2 - lastW, cy - 82, lastW + 6, 164);
+    ctx.fillStyle = '#3b2226';
+    ctx.fillText('N', cx + w / 2 - lastW / 2, cy);
+
+    ctx.font = '30px monospace';
+    ctx.fillStyle = '#e3c98a';
+    ctx.fillText('FRIED CHICKEN  ·  OPEN 24 HOURS', cx, cv.height - 34);
+
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.magFilter = THREE.NearestFilter;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.anisotropy = this.tex?.maxAnisotropy ?? 1;
+
+    const sign = new THREE.Mesh(
+      new THREE.PlaneGeometry(11, 2.75),
+      new THREE.MeshBasicMaterial({ map: tex, toneMapped: false })
+    );
+    sign.position.set(0, roomHeight + 0.55, -30.6);
+    sign.name = 'aokgen_sign';
+    this.scene.add(sign);
+
+    // Backing box so the sign is not a floating decal when seen at an angle.
+    const box = new THREE.Mesh(
+      new THREE.BoxGeometry(11.6, 3.15, 0.42),
+      this.surface('metal', 11.6, 3.15)
+    );
+    box.position.set(0, roomHeight + 0.55, -30.42);
+    this.scene.add(box);
+
+    // Entrance canopy, so the doorway reads as a doorway from the lot.
+    const canopy = new THREE.Mesh(
+      new THREE.BoxGeometry(7.2, 0.28, 2.2),
+      this.surface('metal', 7.2, 2.2)
+    );
+    canopy.position.set(0, 3.35, -31.6);
+    canopy.name = 'entrance_canopy';
+    this.scene.add(canopy);
+
+    for (const px of [-3.2, 3.2]) {
+      const post = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.09, 0.09, 3.2, 8),
+        this.materials.trunk
+      );
+      post.position.set(px, 1.6, -32.5);
+      this.scene.add(post);
+    }
+
+    // Two working lamps under the canopy - the only welcoming light outside.
+    for (const px of [-2.0, 2.0]) {
+      const lamp = new THREE.Mesh(
+        new THREE.BoxGeometry(0.5, 0.08, 0.5),
+        new THREE.MeshBasicMaterial({ color: 0xffe9b0, toneMapped: false })
+      );
+      lamp.position.set(px, 3.18, -31.6);
+      this.scene.add(lamp);
+    }
+  }
+
+  /**
+   * The hidden grinder room behind the generator bay.
+   *
+   * Layout (world coords):
+   *   room interior  x -1.8 .. 7.8, z 31.1 .. 34.8
+   *   false panel    x  1.4 .. 4.6 at z = 30.9   <- the way in
+   *   fixed walls    either side of the panel
+   *
+   * The panel is a collider like any other wall until the player inspects it,
+   * at which point QuestManager slides it aside. Because it is a normal
+   * collider the room is genuinely sealed until then - no peeking through a
+   * seam, and nothing inside is reachable early.
+   */
+  buildSecretRoom(roomHeight, wallThickness) {
+    // Solid returns either side of the hidden panel.
+    this.createWall(-0.4, roomHeight / 2, 30.9, 2.8, roomHeight, wallThickness, 'wallConcrete');
+    this.createWall(6.2, roomHeight / 2, 30.9, 3.2, roomHeight, wallThickness, 'wallConcrete');
+    // Header above the panel, so the opening is a doorway rather than a hole.
+    this.createWall(3, 3.75, 30.9, 3.2, 0.95, wallThickness, 'wallConcrete');
+
+    // The movable false panel.
+    const panel = new THREE.Mesh(
+      new THREE.BoxGeometry(3.2, 3.28, wallThickness),
+      this.surface('wallConcrete', 3.2, 3.28)
+    );
+    panel.position.set(3, 1.64, 30.9);
+    panel.castShadow = true;
+    panel.receiveShadow = true;
+    panel.name = 'secret_wall_panel';
+    panel.userData = {
+      type: 'secret_wall',
+      opened: false,
+      // Closed: filling the doorway at z=30.9.
+      // Open: swung a quarter turn and tucked against the room's west wall,
+      //       clear of the 1.4..4.6 opening. Sliding it sideways would just
+      //       move the blockage into the solid return beside it, so the panel
+      //       turns rather than translates.
+      closed: { x: 3, z: 30.9, ry: 0 },
+      open: { x: -1.45, z: 32.7, ry: Math.PI / 2 }
+    };
+    // It both blocks movement and answers the crosshair.
+    this.scene.add(panel);
+    this.colliders.push(panel);
+    this.propFactory.interactables.push(panel);
+    this.secretWall = panel;
+
+    // Back and side walls of the pocket itself.
+    this.createWall(3, roomHeight / 2, 34.9, 10.2, roomHeight, wallThickness, 'wallConcrete');
+    this.createWall(-2, roomHeight / 2, 33, wallThickness, roomHeight, 4.4, 'wallConcrete');
+    this.createWall(8, roomHeight / 2, 33, wallThickness, roomHeight, 4.4, 'wallConcrete');
+  }
+
+  /**
+   * Non-colliding brick cladding on the outward faces of the building shell,
+   * plus a roof cap so the store reads as a solid volume from the parking lot
+   * instead of an open-topped box of coloured planes.
+   */
+  buildExteriorSkin(roomHeight) {
+    const skin = (x, y, z, w, h, d, rotY = 0) => {
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(w, h, d),
+        this.surface('wallBrick', Math.max(w, d), h)
+      );
+      mesh.position.set(x, y, z);
+      mesh.rotation.y = rotY;
+      mesh.receiveShadow = true;
+      mesh.name = 'exterior_skin';
+      this.scene.add(mesh);
+      return mesh;
+    };
+
+    const t = 0.3;
+    // Front facade either side of the entrance.
+    skin(-15, roomHeight / 2, -30.35, 26, roomHeight, t);
+    skin(15, roomHeight / 2, -30.35, 26, roomHeight, t);
+    skin(0, 3.6, -30.35, 4.0, 1.2, t);
+    // East and west flanks, and the back dock.
+    skin(30.35, roomHeight / 2, 2.5, t, roomHeight, 70);
+    skin(-30.35, roomHeight / 2, -13, t, roomHeight, 34);
+    skin(-30.35, roomHeight / 2, 20.5, t, roomHeight, 29);
+    skin(0, roomHeight / 2, 35.35, 60, roomHeight, t);
+
+    // The AOKGEN sign.
+    //
+    // LightingSystem has always put a red neon PointLight at (0, 4.2, -30.5),
+    // but nothing ever built a sign for it to come from - so the facade was a
+    // blank wall with an unexplained red glow on it, and the building the
+    // whole intro tells you to walk towards had no identity at all.
+    this.buildNeonSign(roomHeight);
+
+    // Parapet + roof cap.
+    const roof = new THREE.Mesh(
+      new THREE.BoxGeometry(61.4, 0.4, 71.4),
+      this.surface('wallConcrete', 61.4, 71.4)
+    );
+    roof.position.set(0, roomHeight + 0.2, 2.5);
+    roof.name = 'roof';
+    this.scene.add(roof);
+
+    const parapet = [
+      [0, roomHeight + 0.75, -30.35, 61.4, 1.1, t],
+      [0, roomHeight + 0.75, 35.35, 61.4, 1.1, t],
+      [30.35, roomHeight + 0.75, 2.5, t, 1.1, 71.4],
+      [-30.35, roomHeight + 0.75, 2.5, t, 1.1, 71.4]
+    ];
+    for (const [x, y, z, w, h, d] of parapet) skin(x, y, z, w, h, d);
+  }
+
+  /**
+   * Walls accept either a legacy THREE.Material or a TextureLibrary surface
+   * name. When given a name the material is tiled to the wall's own footprint,
+   * so a 26m facade and a 1.2m lintel show the same texel density instead of
+   * one texture stretched across whatever the mesh happened to be.
+   */
   createWall(x, y, z, width, height, depth, material) {
     const geo = new THREE.BoxGeometry(width, height, depth);
-    const wall = new THREE.Mesh(geo, material);
+    // Tile against the largest face of the box.
+    const mat = typeof material === 'string'
+      ? this.surface(material, Math.max(width, depth), height)
+      : material;
+    const wall = new THREE.Mesh(geo, mat);
     wall.position.set(x, y, z);
     wall.castShadow = true;
     wall.receiveShadow = true;
@@ -480,7 +872,7 @@ export class LevelBuilder {
     const eyeMat = new THREE.MeshBasicMaterial({ color: 0xfde047 });
     for (let i = 0; i < 5; i++) {
       const eye = new THREE.Mesh(new THREE.SphereGeometry(0.06, 6, 6), eyeMat);
-      eye.position.set((Math.random() - 0.5) * 5, 0.1, (Math.random() - 0.5) * 5);
+      eye.position.set((this.rand() - 0.5) * 5, 0.1, (this.rand() - 0.5) * 5);
       eyesGroup.add(eye);
     }
     ballPitGroup.add(eyesGroup);
@@ -511,59 +903,131 @@ export class LevelBuilder {
     this.generatorMesh = genGroup;
   }
 
+  /**
+   * The player's broken-down car.
+   *
+   * This is the very first thing the game shows - the intro is played sitting
+   * in it, and it is the escape objective at the end - and it was five
+   * floating boxes with no wheels, no bumpers and no shadow contact, hovering
+   * over the asphalt. Rebuilt as a recognisable 1980s sedan: tapered bonnet
+   * and boot, wheels with arches, bumpers, grille, mirrors, lit tail lights
+   * and an interior visible through the glass.
+   *
+   * Local axes: +Z is the front of the car, +X is its right flank.
+   */
   buildExteriorCar() {
     const carGroup = new THREE.Group();
     carGroup.name = 'car';
     carGroup.position.set(3, 0, -42);
     carGroup.rotation.y = Math.PI * 0.92;
 
-    // Simple car body
-    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x2e3a38, roughness: 0.35, metalness: 0.25 });
-    const body = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.8, 4.2), bodyMat);
-    body.position.y = 0.7;
-    body.castShadow = true;
-    carGroup.add(body);
+    const paint = new THREE.MeshStandardMaterial({ color: 0x2b3a37, roughness: 0.52, metalness: 0.35 });
+    const trim = new THREE.MeshStandardMaterial({ color: 0x14171a, roughness: 0.7, metalness: 0.4 });
+    const chrome = new THREE.MeshStandardMaterial({ color: 0xb8bdc4, roughness: 0.28, metalness: 0.9 });
+    const rubber = new THREE.MeshStandardMaterial({ color: 0x0c0d0f, roughness: 0.95, metalness: 0.0 });
+    const glassMat = new THREE.MeshStandardMaterial({
+      color: 0x0a1014, roughness: 0.12, metalness: 0.6, transparent: true, opacity: 0.75
+    });
 
-    // Roof
-    const roof = new THREE.Mesh(new THREE.BoxGeometry(1.85, 0.6, 2.2), bodyMat);
-    roof.position.set(0, 1.25, -0.2);
-    carGroup.add(roof);
+    const add = (geo, mat, x, y, z, rx = 0, ry = 0, rz = 0) => {
+      const m = new THREE.Mesh(geo, mat);
+      m.position.set(x, y, z);
+      m.rotation.set(rx, ry, rz);
+      m.castShadow = true;
+      carGroup.add(m);
+      return m;
+    };
 
-    // Windows (black)
-    const glassMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.05, metalness: 0.9 });
-    const windshield = new THREE.Mesh(new THREE.BoxGeometry(1.84, 0.52, 0.1), glassMat);
-    windshield.position.set(0, 1.2, 0.95);
-    windshield.rotation.x = 0.25;
-    carGroup.add(windshield);
+    // --- lower body: sills, then the main tub ---
+    add(new THREE.BoxGeometry(1.94, 0.34, 4.30), trim, 0, 0.42, 0);
+    add(new THREE.BoxGeometry(2.00, 0.46, 4.16), paint, 0, 0.78, 0);
 
-    const rear = new THREE.Mesh(new THREE.BoxGeometry(1.84, 0.45, 0.1), glassMat);
-    rear.position.set(0, 1.2, -1.35);
-    rear.rotation.x = -0.2;
-    carGroup.add(rear);
+    // Bonnet and boot, slightly lower than the cabin so the profile steps.
+    add(new THREE.BoxGeometry(1.92, 0.22, 1.34), paint, 0, 1.06, 1.34);
+    add(new THREE.BoxGeometry(1.92, 0.24, 1.02), paint, 0, 1.07, -1.55);
 
-    // Headlights (glow when near)
-    const hlGeo = new THREE.BoxGeometry(0.2, 0.16, 0.08);
-    const hlMat = new THREE.MeshBasicMaterial({ color: 0xfef9c3 });
-    const hlLeft = new THREE.Mesh(hlGeo, hlMat);
-    hlLeft.position.set(-0.7, 0.55, 2.12);
-    carGroup.add(hlLeft);
-    const hlRight = hlLeft.clone();
-    hlRight.position.set(0.7, 0.55, 2.12);
-    carGroup.add(hlRight);
+    // --- cabin ---
+    add(new THREE.BoxGeometry(1.80, 0.62, 2.10), paint, 0, 1.36, -0.18);
+    // Roof panel, inset so the pillars read.
+    add(new THREE.BoxGeometry(1.68, 0.10, 1.94), paint, 0, 1.70, -0.18);
 
-    // Interior steering wheel / seat blocked view could be added
-    // Interactable car
+    // Glass: raked windscreen, backlight, and the side windows.
+    add(new THREE.BoxGeometry(1.66, 0.60, 0.07), glassMat, 0, 1.40, 0.88, -0.38);
+    add(new THREE.BoxGeometry(1.66, 0.54, 0.07), glassMat, 0, 1.42, -1.22, 0.32);
+    add(new THREE.BoxGeometry(0.06, 0.44, 1.72), glassMat, 0.88, 1.44, -0.20);
+    add(new THREE.BoxGeometry(0.06, 0.44, 1.72), glassMat, -0.88, 1.44, -0.20);
+
+    // A hint of interior so the cabin is not a void behind the glass.
+    add(new THREE.BoxGeometry(1.54, 0.34, 0.44), trim, 0, 1.18, -0.60);   // bench seat
+    add(new THREE.BoxGeometry(1.54, 0.40, 0.16), trim, 0, 1.36, -0.86);   // seat back
+    add(new THREE.CylinderGeometry(0.19, 0.19, 0.04, 14), trim, -0.42, 1.34, 0.52, 1.15);
+
+    // --- wheels, in arches, actually touching the ground ---
+    const tyreGeo = new THREE.CylinderGeometry(0.36, 0.36, 0.24, 16);
+    const hubGeo = new THREE.CylinderGeometry(0.17, 0.17, 0.26, 12);
+    for (const [wx, wz] of [[0.94, 1.34], [-0.94, 1.34], [0.94, -1.40], [-0.94, -1.40]]) {
+      add(tyreGeo, rubber, wx, 0.36, wz, 0, 0, Math.PI / 2);
+      add(hubGeo, chrome, wx, 0.36, wz, 0, 0, Math.PI / 2);
+      // Arch lip above each wheel.
+      add(new THREE.BoxGeometry(0.10, 0.30, 0.92), trim, wx * 1.02, 0.72, wz);
+    }
+
+    // --- bumpers, grille, lights ---
+    add(new THREE.BoxGeometry(2.04, 0.22, 0.18), chrome, 0, 0.60, 2.12);
+    add(new THREE.BoxGeometry(2.04, 0.22, 0.18), chrome, 0, 0.60, -2.12);
+    add(new THREE.BoxGeometry(1.40, 0.26, 0.10), trim, 0, 0.90, 2.10);   // grille
+
+    // Headlights: dead, because the car is dead. They read as glass, not lamps.
+    const deadLamp = new THREE.MeshStandardMaterial({
+      color: 0x6b6f5a, roughness: 0.25, metalness: 0.3
+    });
+    add(new THREE.BoxGeometry(0.42, 0.22, 0.10), deadLamp, 0.68, 0.94, 2.12);
+    add(new THREE.BoxGeometry(0.42, 0.22, 0.10), deadLamp, -0.68, 0.94, 2.12);
+
+    // Tail lights still have a trickle of charge - the one warm point in the
+    // parking lot, and a landmark for finding the car again in the dark.
+    const tailMat = new THREE.MeshBasicMaterial({ color: 0x8c1d1d });
+    add(new THREE.BoxGeometry(0.40, 0.20, 0.08), tailMat, 0.70, 0.98, -2.14);
+    add(new THREE.BoxGeometry(0.40, 0.20, 0.08), tailMat, -0.70, 0.98, -2.14);
+
+    // Wing mirrors and door shutlines.
+    add(new THREE.BoxGeometry(0.20, 0.12, 0.08), trim, 1.02, 1.32, 0.62);
+    add(new THREE.BoxGeometry(0.20, 0.12, 0.08), trim, -1.02, 1.32, 0.62);
+    add(new THREE.BoxGeometry(0.02, 0.44, 0.04), trim, 1.01, 0.86, -0.02);
+    add(new THREE.BoxGeometry(0.02, 0.44, 0.04), trim, -1.01, 0.86, -0.02);
+
+    // Interactable proxy (invisible, covers the whole car).
     const carProxy = new THREE.Mesh(
-      new THREE.BoxGeometry(2.2, 1.4, 4.6),
+      new THREE.BoxGeometry(2.2, 1.8, 4.6),
       new THREE.MeshBasicMaterial({ visible: false })
     );
-    carProxy.position.y = 0.7;
+    carProxy.position.y = 0.9;
     carProxy.userData = { type: 'car' };
     carGroup.add(carProxy);
     this.propFactory.interactables.push(carProxy);
 
     this.scene.add(carGroup);
     this.carGroup = carGroup;
+
+    // The car is solid. Without this the player walks straight through the
+    // one object the whole intro is about.
+    //
+    // The collider is added as a CHILD of carGroup rather than as a world-
+    // axis box, because the car is rotated ~166 degrees: an axis-aligned
+    // proxy would either be swapped (blocking a 4.4m span across the car's
+    // width) or have to be a loose 5m square that swallows the spot the
+    // player is teleported to when they step out. As a child it inherits the
+    // rotation, and PlayerController's Box3 is computed from the transformed
+    // mesh, so it hugs the actual footprint.
+    const carCollider = new THREE.Mesh(
+      new THREE.BoxGeometry(1.98, 1.7, 4.3),
+      new THREE.MeshBasicMaterial({ visible: false })
+    );
+    carCollider.position.y = 0.85;
+    carCollider.name = 'car_collider';
+    carGroup.add(carCollider);
+    carGroup.updateMatrixWorld(true);
+    this.colliders.push(carCollider);
 
     // Small flashlight battery near car as lure
     const bat = this.propFactory.createBatteryPickup(-1, 0.2, -40);
@@ -636,15 +1100,27 @@ export class LevelBuilder {
         new THREE.BoxGeometry(0.5, 0.5, 0.5),
         new THREE.MeshStandardMaterial({ color: 0x9a8c72 })
       );
-      box.position.set(-21 + (j % 3) * 0.6, 0.25 + Math.floor(j / 3) * 0.55, 23.5 + Math.random());
+      box.position.set(-21 + (j % 3) * 0.6, 0.25 + Math.floor(j / 3) * 0.55, 23.5 + this.rand());
       this.scene.add(box);
     }
   }
 
+  /**
+   * Wall art. These are real painted images (not sprite sheets), so they only
+   * need correct colour handling: without SRGBColorSpace they render washed
+   * out and desaturated against the sRGB-corrected world.
+   */
   buildPostersAndPortraits() {
     const loader = new THREE.TextureLoader();
 
-    loader.load('/assets/poster1.jpg', (tex) => {
+    /** Loads a piece of wall art with the right colour space and filtering. */
+    const art = (url, onReady) => loader.load(url, (tex) => {
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = this.tex?.maxAnisotropy ?? 1;
+      onReady(tex);
+    });
+
+    art('/assets/poster1.jpg', (tex) => {
       const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.35 });
       const geo = new THREE.PlaneGeometry(2.6, 2.6);
       const p1 = new THREE.Mesh(geo, mat);
@@ -656,7 +1132,7 @@ export class LevelBuilder {
       this.scene.add(p2);
     });
 
-    loader.load('/assets/menu_horror.jpg', (tex) => {
+    art('/assets/menu_horror.jpg', (tex) => {
       const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.25 });
       const geo = new THREE.PlaneGeometry(2.4, 2.4);
       const m1 = new THREE.Mesh(geo, mat);
@@ -668,7 +1144,7 @@ export class LevelBuilder {
       this.scene.add(m2);
     });
 
-    loader.load('/assets/cursed_portrait.jpg', (tex) => {
+    art('/assets/cursed_portrait.jpg', (tex) => {
       const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.28 });
       const geo = new THREE.PlaneGeometry(3.0, 3.0);
       const portrait = new THREE.Mesh(geo, mat);
@@ -686,7 +1162,7 @@ export class LevelBuilder {
       this.scene.add(changed);
     });
 
-    loader.load('/assets/meat_grinder.jpg', (tex) => {
+    art('/assets/meat_grinder.jpg', (tex) => {
       const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.4 });
       const geo = new THREE.PlaneGeometry(5.0, 3.2);
       const grinder = new THREE.Mesh(geo, mat);
@@ -694,12 +1170,29 @@ export class LevelBuilder {
       this.scene.add(grinder);
     });
 
-    // Additional blood poster at generator secret
-    loader.load('/assets/colonel_stalker.jpg', (tex) => {
-      const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.4, transparent: true, opacity: 0.9 });
-      const geo = new THREE.PlaneGeometry(2.2, 2.2);
-      const poster = new THREE.Mesh(geo, mat);
-      poster.position.set(3, 1.8, 26.9);
+    // Poster of the Colonel in the generator bay.
+    //
+    // This used to map the raw colonel_stalker.jpg SPRITE SHEET onto the
+    // wall - all eight animation frames at once, on their magenta chroma
+    // background, complete with grid rules. It rendered as a bright pink
+    // checkerboard hanging in the room. It now shows a single keyed frame
+    // from the baked atlas, cropped by UV to one cell.
+    loader.load('/assets/sprites/colonel_stalker.png', (tex) => {
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.magFilter = THREE.NearestFilter;
+      tex.minFilter = THREE.NearestFilter;
+      tex.generateMipmaps = false;
+      tex.wrapS = THREE.ClampToEdgeWrapping;
+      tex.wrapT = THREE.ClampToEdgeWrapping;
+      // One cell of the 4x2 atlas: top-left frame.
+      tex.repeat.set(1 / 4, 1 / 2);
+      tex.offset.set(0, 1 / 2);
+
+      const mat = new THREE.MeshBasicMaterial({
+        map: tex, transparent: true, alphaTest: 0.2, depthWrite: false
+      });
+      const poster = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 2.4), mat);
+      poster.position.set(3, 1.6, 26.9);
       poster.rotation.y = Math.PI;
       poster.name = 'colonel_poster_generator';
       this.scene.add(poster);
@@ -709,6 +1202,7 @@ export class LevelBuilder {
   buildCCTVWall() {
     const loader = new THREE.TextureLoader();
     loader.load('/assets/cctv_glitch.jpg', (tex) => {
+      tex.colorSpace = THREE.SRGBColorSpace;
       const tvGroup = new THREE.Group();
       tvGroup.position.set(-29.6, 1.85, 8.0);
       tvGroup.rotation.y = Math.PI / 2;
@@ -750,12 +1244,12 @@ export class LevelBuilder {
     bloodTrail.visible = false;
     const bloodMat = new THREE.MeshStandardMaterial({ color: 0x7f1d1d, roughness: 0.35, transparent: true, opacity: 0.88 });
     for (let i = 0; i < 12; i++) {
-      const spot = new THREE.Mesh(new THREE.CircleGeometry(0.18 + Math.random() * 0.22, 8), bloodMat);
+      const spot = new THREE.Mesh(new THREE.CircleGeometry(0.18 + this.rand() * 0.22, 8), bloodMat);
       spot.rotation.x = -Math.PI / 2;
       spot.position.set(
-        THREE.MathUtils.lerp(0, 0, i / 11) + (Math.random() - 0.5) * 0.6,
+        THREE.MathUtils.lerp(0, 0, i / 11) + (this.rand() - 0.5) * 0.6,
         0.03,
-        THREE.MathUtils.lerp(10, 28, i / 11) + (Math.random() - 0.5) * 0.8
+        THREE.MathUtils.lerp(10, 28, i / 11) + (this.rand() - 0.5) * 0.8
       );
       bloodTrail.add(spot);
     }
@@ -766,11 +1260,11 @@ export class LevelBuilder {
     for (let i = 0; i < 18; i++) {
       const paper = new THREE.Mesh(new THREE.PlaneGeometry(0.35, 0.45), paperMat);
       paper.rotation.x = -Math.PI / 2;
-      paper.rotation.z = Math.random() * Math.PI;
+      paper.rotation.z = this.rand() * Math.PI;
       paper.position.set(
-        (Math.random() - 0.5) * 18,
+        (this.rand() - 0.5) * 18,
         0.02,
-        -22 + Math.random() * 18
+        -22 + this.rand() * 18
       );
       this.scene.add(paper);
     }
@@ -824,11 +1318,11 @@ export class LevelBuilder {
     for (let i = 0; i < 6; i++) {
       const tile = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.06, 0.55), tileMat);
       tile.position.set(
-        (Math.random() - 0.5) * 20,
+        (this.rand() - 0.5) * 20,
         0.03,
-        (Math.random() - 0.5) * 40
+        (this.rand() - 0.5) * 40
       );
-      tile.rotation.y = Math.random() * Math.PI;
+      tile.rotation.y = this.rand() * Math.PI;
       this.scene.add(tile);
     }
   }

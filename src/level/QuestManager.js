@@ -206,10 +206,10 @@ export class QuestManager {
     // Office door (requires office key) - aesthetic sliding? Use swing
     this.doorSystem.createDoor({
       name: 'office_main',
-      // Hinged at z=10.4, leaf spans the 1.2m doorway to z=11.6.
-      x: -14, y: 1.15, z: 10.4,
+      // Hinged at z=10.2, leaf spans the 1.6m doorway to z=11.8.
+      x: -14, y: 1.15, z: 10.2,
       rotation: 0,
-      width: 0.12, height: 2.3, depth: 1.2,
+      width: 0.12, height: 2.3, depth: 1.6,
       type: 'office',
       locked: true,
       keyId: 'office_key',
@@ -222,10 +222,10 @@ export class QuestManager {
     // Janitor closet in restroom (free)
     this.doorSystem.createDoor({
       name: 'janitor_closet',
-      // Fills the 1.2m doorway cut into the restroom/janitor divider at z=-24.
-      x: -23.1, y: 1.15, z: -24,
+      // Fills the 1.6m doorway cut into the restroom/janitor divider at z=-24.
+      x: -23.3, y: 1.15, z: -24,
       rotation: Math.PI / 2,
-      width: 0.12, height: 2.3, depth: 1.2,
+      width: 0.12, height: 2.3, depth: 1.6,
       type: 'bathroom',
       locked: false,
       lockedMessage: '',
@@ -235,11 +235,11 @@ export class QuestManager {
     // Storage door (southwest) - unlocked but creaky
     this.doorSystem.createDoor({
       name: 'storage_door',
-      // Fills the doorway in the storage room's north wall (x -18.6..-17.4).
+      // Fills the doorway in the storage room's north wall (x -18.8..-17.2).
       // The wall runs along X, so the leaf must sweep along X too.
-      x: -18.6, y: 1.15, z: 22,
+      x: -18.8, y: 1.15, z: 22,
       rotation: Math.PI / 2,
-      width: 0.12, height: 2.3, depth: 1.2,
+      width: 0.12, height: 2.3, depth: 1.6,
       type: 'office',
       locked: false,
       anomaly: true
@@ -248,10 +248,10 @@ export class QuestManager {
     // Generator room door - free, autoClose for tension
     this.doorSystem.createDoor({
       name: 'generator_door',
-      // Fills the doorway in the kitchen/basement divider (x -2..-0.8).
+      // Fills the doorway in the kitchen/basement divider (x -2..-0.4).
       x: -2, y: 1.15, z: 22,
       rotation: Math.PI / 2,
-      width: 0.12, height: 2.3, depth: 1.2,
+      width: 0.12, height: 2.3, depth: 1.6,
       type: 'metal',
       locked: false,
       autoClose: true,
@@ -351,8 +351,12 @@ export class QuestManager {
 
     // Meat bags in freezer vault - 2
     const meatMat = new THREE.MeshStandardMaterial({ color: 0x7a1a28, roughness: 0.58 });
+    // Sat at x=20 this bag was buried inside the freezer's internal shelf slab
+    // (a 0.3 x 2.4 x 6 wall centred on x=20, z=7), so the interact ray could
+    // never touch it and the vault step could not be completed. Moved into the
+    // open aisle beside the shelf.
     const meat1 = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.22, 0.44), meatMat);
-    meat1.position.set(20, 0.22, 7);
+    meat1.position.set(21.4, 0.22, 7);
     meat1.userData = { type: 'meat_pickup' };
     this.scene.add(meat1);
     pf.interactables.push(meat1);
@@ -395,7 +399,7 @@ export class QuestManager {
     });
 
     // Employee photo on office wall
-    pf.createPhotoFrame(-29.65, 2.0, 14, 'employee_photo', '/assets/employee_hands.jpg');
+    pf.createPhotoFrame(-29.65, 2.0, 14, 'employee_photo', '/assets/sprites/employee_hands.png');
 
     // Meat manifest inside freezer on shelf
     // Leaning on the freezer shelf, not inside the slab (x 19.85..20.15).
@@ -428,9 +432,9 @@ export class QuestManager {
       important: true
     });
 
-    // Grinder receipt secret - behind generator hidden wall (will be revealed after fuel)
-    // In the pocket in front of the false wall (slab spans z 33.61..33.99).
-    pf.createDocument(0, 0.95, 33.35, {
+    // Grinder receipt - inside the secret grinder room, which is sealed by the
+    // false panel at z=30.9 until the player finds and opens it.
+    pf.createDocument(3, 0.95, 33.6, {
       docId: 'grinder_receipt',
       title: 'Grinder Receipt',
       flat: false
@@ -458,7 +462,11 @@ export class QuestManager {
     pf.createBatteryPickup(-1.8, 1.35, -4.5);
     pf.createBatteryPickup(-8, 0.96, -8.2);
     pf.createBatteryPickup(0, 1.08, 10.0);
-    pf.createBatteryPickup(12, 1.0, 30.8);
+    // (12, 30.8) was inside the sealed dead space east of the generator bay -
+    // enclosed by the bay wall at x=8 and the shell at x=30, with no way in.
+    // Moved onto the shelving in the storage room, which the player already
+    // has a reason to visit for the second diesel can.
+    pf.createBatteryPickup(-20.4, 1.05, 24.6);
 
     // Fuel cans - janitor closet restroom + storage
     pf.createFuelCan(-22.8, 0.28, -27.5); // janitor closet west restroom
@@ -819,6 +827,27 @@ export class QuestManager {
       case 'cctv_monitor': {
         this.story?.watchCCTV(data.camId);
         this.showCCTVFeed(data.camId);
+        return;
+      }
+
+      // The false panel at the back of the generator bay. PlayerController
+      // has always offered "[E] Inspect wall" for this type, but nothing
+      // handled it, so the prompt did nothing and the room behind it was
+      // unreachable. Inspecting it now slides the panel aside for good.
+      case 'secret_wall': {
+        if (data.opened) return;
+        data.opened = true;
+        object.position.set(data.open.x, object.position.y, data.open.z);
+        object.rotation.y = data.open.ry;
+        object.updateMatrixWorld(true);
+        // The panel is a collider: the cached box has to be rebuilt or the
+        // player would walk into a wall that is no longer drawn there.
+        this.player?.refreshCollider(object);
+        this.audio?.playDoorOpen?.(object.position, 0.7);
+        this.audio?.playWhisper?.(0.35);
+        this.showBanner('THE WALL MOVES - THERE IS A ROOM BACK HERE', 3000);
+        this.player.showNotification('A grinding room. It has been used recently.');
+        this.completeObjective('secret_wall');
         return;
       }
 
@@ -1470,6 +1499,16 @@ export class QuestManager {
       if (d.type === 'fryer_station') { d.loadedCount = 0; d.hasMeat = false; }
       if (d.type === 'generator') { d.fueled = false; d.fuelCount = 0; }
       if (d.type === 'safe') d.isOpen = false;
+      // The secret panel slides in world space, so a restart has to physically
+      // put it back as well as clearing its flag - otherwise run 2 starts with
+      // the grinder room already open.
+      if (d.type === 'secret_wall') {
+        d.opened = false;
+        obj.position.set(d.closed.x, obj.position.y, d.closed.z);
+        obj.rotation.y = d.closed.ry;
+        obj.updateMatrixWorld(true);
+        this.player?.refreshCollider(obj);
+      }
     }
     for (const spill of this.levelBuilder.greaseSpills || []) spill.visible = true;
 

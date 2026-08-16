@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { ProceduralTextureGen } from './engine/ProceduralTextureGen.js';
-import { ChromaKeyer } from './engine/ChromaKeyer.js';
+import { TextureLibrary } from './engine/TextureLibrary.js';
 import { AudioManager } from './engine/AudioManager.js';
 import { LightingSystem } from './engine/LightingSystem.js';
 import { LevelBuilder } from './level/LevelBuilder.js';
@@ -35,18 +35,26 @@ class Game {
 
   initScene() {
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x050208);
-    // Dense horror fog - changes with power state
-    this.scene.fog = new THREE.FogExp2(0x08060a, 0.028);
+    this.scene.background = new THREE.Color(0x070610);
+    // Horror fog. At the old 0.028 exponential density everything past ~12m
+    // was solid black, which hid the level geometry, the textures and the
+    // monster's approach alike. 0.016 still swallows the far end of a room
+    // but lets you actually see the space you are standing in.
+    this.scene.fog = new THREE.FogExp2(0x0a0812, 0.016);
 
-    this.camera = new THREE.PerspectiveCamera(74, window.innerWidth / window.innerHeight, 0.1, 100);
+    this.camera = new THREE.PerspectiveCamera(74, window.innerWidth / window.innerHeight, 0.1, 160);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.3));
+    // Cap at 1: this is a pixel-art game, and rendering above 1x only blurs
+    // the texel grid while costing fill rate.
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1));
     this.renderer.shadowMap.enabled = false;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.08;
+    this.renderer.toneMappingExposure = 1.25;
+    // The textures are authored in sRGB; without this the whole game renders
+    // washed out and the "dirty" palette turns grey.
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
     this.container.appendChild(this.renderer.domElement);
 
@@ -62,91 +70,71 @@ class Game {
     this.audio = new AudioManager();
   }
 
+  /**
+   * Sprite atlases.
+   *
+   * These used to be built on the fly: generate a procedural placeholder
+   * sheet, chroma-key it, then fetch ~4 MB of magenta-backed JPGs, key those
+   * per-pixel on the main thread and rebuild trimmed atlases from them - all
+   * while the player was already walking around, and identically on every
+   * single load.
+   *
+   * tools/build_sprites.py now does that work once, offline, and does it
+   * better (it also strips the frame captions and grid rules that the runtime
+   * keyer left visible in-game). Here we just load finished RGBA PNGs, which
+   * removes the placeholder-then-pop entirely.
+   */
   initAssets() {
+    const loader = new THREE.TextureLoader();
 
-    const rawMonsterSheet = ProceduralTextureGen.generateChickenMonsterSheet();
-    const rawColonelSheet = ProceduralTextureGen.generateColonelStalkerSheet();
-    const rawHandsSheet = ProceduralTextureGen.generateEmployeeHandsSheet();
-    const rawPropsSheet = ProceduralTextureGen.generateCursedPropsSheet();
+    /** Loads one baked atlas as a pixel-perfect, non-mipmapped sprite sheet. */
+    const loadAtlas = (name, cols, rows, onLoad) => {
+      const tex = loader.load(`/assets/sprites/${name}.png`, (t) => {
+        t.needsUpdate = true;
+        onLoad?.(t);
+      });
+      tex.magFilter = THREE.NearestFilter;
+      tex.minFilter = THREE.NearestFilter;
+      tex.generateMipmaps = false;
+      tex.wrapS = THREE.ClampToEdgeWrapping;
+      tex.wrapT = THREE.ClampToEdgeWrapping;
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.repeat.set(1 / cols, 1 / rows);
+      tex.userData = { cols, rows };
+      return tex;
+    };
 
-    const keyedMonster = ChromaKeyer.processChromaKey(rawMonsterSheet);
-    const keyedColonel = ChromaKeyer.processChromaKey(rawColonelSheet);
-    const keyedHands = ChromaKeyer.processChromaKey(rawHandsSheet);
-    const keyedProps = ChromaKeyer.processChromaKey(rawPropsSheet);
+    this.monsterTexture = loadAtlas('chicken_monster', 4, 2);
+    this.colonelTexture = loadAtlas('colonel_stalker', 4, 2);
+    this.propsTexture = loadAtlas('kfc_props', 4, 2);
+    // The hatchling sheet is a genuine 4x4 (walk / attack / lunge / death),
+    // and is loaded as such from the start - no 4x2 placeholder to re-grid.
+    this.hatchlingTexture = loadAtlas('chicken_hatchling', 4, 4);
 
-    this.monsterTexture = ChromaKeyer.createKeyedTexture(keyedMonster, 4, 2);
-    this.colonelTexture = ChromaKeyer.createKeyedTexture(keyedColonel, 4, 2);
-    this.propsTexture = ChromaKeyer.createKeyedTexture(keyedProps, 4, 2);
-    this.viewmodelFrames = ChromaKeyer.sliceFrames(keyedHands, 4, 2);
-
-    // Hatchlings use the same procedural sheet as the adult until the real JPG
-    // arrives - reuse the already-keyed canvas instead of generating and
-    // chroma-keying a second 1024x512 buffer for identical pixels. The
-    // placeholder is 4x2, the real art is 4x4, so the sprite is told which
-    // layout it currently holds and re-lays-out when the JPG lands.
-    this.hatchlingTexture = ChromaKeyer.createKeyedTexture(keyedMonster, 4, 2);
-    this.hatchlingTexture.userData = { cols: 4, rows: 2 };
-
-    // Async load real JPGs
-    ChromaKeyer.loadAndKeyImage('/assets/chicken_monster.jpg').then(canvas => {
-      if (canvas) {
-        this.monsterTexture.image = ChromaKeyer.createTrimmedAtlas(canvas, 4, 2);
-        this.monsterTexture.needsUpdate = true;
-        if (this.monster?.sprite) {
-          this.monster.sprite.texture.image = this.monsterTexture.image;
-          this.monster.sprite.texture.needsUpdate = true;
+    // The viewmodel draws to a 2D canvas, so it needs the frames as separate
+    // images rather than as a GPU atlas.
+    this.viewmodelFrames = [];
+    const handsImg = new Image();
+    handsImg.onload = () => {
+      const cols = 4, rows = 2;
+      const fw = handsImg.width / cols;
+      const fh = handsImg.height / rows;
+      const frames = [];
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const cv = document.createElement('canvas');
+          cv.width = fw;
+          cv.height = fh;
+          const ctx = cv.getContext('2d');
+          ctx.imageSmoothingEnabled = false;
+          ctx.drawImage(handsImg, c * fw, r * fh, fw, fh, 0, 0, fw, fh);
+          frames.push(cv);
         }
       }
-    });
-
-    ChromaKeyer.loadAndKeyImage('/assets/colonel_stalker.jpg').then(canvas => {
-      if (canvas) {
-        this.colonelTexture.image = ChromaKeyer.createTrimmedAtlas(canvas, 4, 2);
-        this.colonelTexture.needsUpdate = true;
-        if (this.questManager) this.questManager.colonelTexture = this.colonelTexture;
-      }
-    });
-
-    ChromaKeyer.loadAndKeyImage('/assets/chicken_hatchling.jpg').then(canvas => {
-      if (!canvas) return;
-      // The hatchling sheet is a 4x4 grid (walk / attack / lunge / death) but
-      // it carries a caption gutter down the left edge and a margin on the
-      // right. Measured grid: x 151..1261 of 1376. Slicing the full canvas
-      // would shear every frame sideways.
-      const grid = { x: 151, y: 0, width: 1110, height: canvas.height };
-      // Swap the image in place so live hatchlings pick up the real art, and
-      // never leave the placeholder texture on the GPU.
-      this.hatchlingTexture.image = ChromaKeyer.createTrimmedAtlas(canvas, 4, 4, 0.035, grid);
-      this.hatchlingTexture.needsUpdate = true;
-      this.hatchlingTexture.userData = { cols: 4, rows: 4 };
-      if (this.questManager) {
-        this.questManager.hatchlingTexture = this.hatchlingTexture;
-        // AnimatedSprite clones its texture, so live hatchlings need the new
-        // image pushed onto their own clone - and the grid changes from 4x2
-        // to 4x4, so the UV layout has to be rebuilt too.
-        for (const h of this.questManager.hatchlings) {
-          if (!h.sprite?.texture) continue;
-          h.sprite.texture.image = this.hatchlingTexture.image;
-          h.sprite.texture.needsUpdate = true;
-          h.sprite.setGrid(4, 4);
-        }
-      }
-    });
-
-    ChromaKeyer.loadAndKeyImage('/assets/employee_hands.jpg').then(canvas => {
-      if (canvas) {
-        const loadedFrames = ChromaKeyer.sliceFrames(canvas, 4, 2);
-        this.viewmodelFrames = loadedFrames;
-        if (this.viewmodel) this.viewmodel.frames = loadedFrames;
-      }
-    });
-
-    ChromaKeyer.loadAndKeyImage('/assets/kfc_props.jpg').then(canvas => {
-      if (canvas) {
-        this.propsTexture.image = ChromaKeyer.createTrimmedAtlas(canvas, 4, 2);
-        this.propsTexture.needsUpdate = true;
-      }
-    });
+      this.viewmodelFrames = frames;
+      if (this.viewmodel) this.viewmodel.frames = frames;
+    };
+    handsImg.src = '/assets/sprites/employee_hands.png';
 
     this.pbrTextures = {
       floor: ProceduralTextureGen.createCheckeredFloorPBR(512),
@@ -162,8 +150,10 @@ class Game {
     this.storyManager = new StoryManager();
     this.lighting = new LightingSystem(this.scene, this.camera);
 
-    // Level
-    this.levelBuilder = new LevelBuilder(this.scene, this.pbrTextures, this.audio);
+    // Level. The texture library needs the renderer for its anisotropy cap,
+    // so it is created here rather than in initAssets().
+    this.textures = new TextureLibrary(this.renderer);
+    this.levelBuilder = new LevelBuilder(this.scene, this.pbrTextures, this.audio, this.textures);
     const worldData = this.levelBuilder.build();
     this.colliders = worldData.colliders; // mutable reference
     this.interactables = worldData.interactables;
@@ -354,7 +344,10 @@ class Game {
     if (this.carRain) this.timers.setTimeout(() => this.carRain.classList.remove('active'), 1200);
 
     // Step out beside the driver's door.
-    this.player.position.set(3.4, this.player.playerHeight, -40.2);
+    // (3.4, -40.2) was inside the car's footprint - harmless while the car had
+    // no collider, but it would drop the player inside solid geometry now that
+    // it has one. This spot is clear of the body on the driver's flank.
+    this.player.position.set(4.94, this.player.playerHeight, -41.5);
     this.player.targetHeight = this.player.playerHeight;
     this.player.yaw = Math.PI * -0.15;
     this.player.addScreenShake(0.12, 0.4);
